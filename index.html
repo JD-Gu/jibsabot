@@ -13,254 +13,107 @@
 <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@300;400;500;700&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
 <style>
 :root {
-  --bg: #0A0F1E;
-  --bg2: #111827;
-  --bg3: #1a2235;
-  --card: #151e30;
-  --border: rgba(255,255,255,0.07);
-  --accent: #3B82F6;
-  --accent2: #10B981;
-  --accent3: #F59E0B;
-  --accent4: #8B5CF6;
-  --text: #F1F5F9;
-  --text2: #94A3B8;
-  --text3: #475569;
-  --danger: #EF4444;
-  --safe-bottom: env(safe-area-inset-bottom, 16px);
+  --bg:#0A0F1E; --bg2:#111827; --bg3:#1a2235; --card:#151e30;
+  --border:rgba(255,255,255,0.07); --accent:#3B82F6; --accent2:#10B981;
+  --accent3:#F59E0B; --accent4:#8B5CF6; --text:#F1F5F9;
+  --text2:#94A3B8; --text3:#475569; --danger:#EF4444;
+  --safe-bottom:env(safe-area-inset-bottom,16px);
 }
-* { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
-html, body { height: 100%; overflow: hidden; background: var(--bg); font-family: 'Noto Sans KR', sans-serif; color: var(--text); }
-
-/* 앱 레이아웃 */
-.app { display: flex; flex-direction: column; height: 100vh; height: 100dvh; }
-.header {
-  padding: 16px 20px 12px;
-  padding-top: calc(16px + env(safe-area-inset-top, 0px));
-  background: var(--bg);
-  border-bottom: 0.5px solid var(--border);
-  display: flex; align-items: center; justify-content: space-between;
-  flex-shrink: 0;
-}
-.header-left { display: flex; align-items: center; gap: 10px; }
-.bot-avatar {
-  width: 36px; height: 36px; border-radius: 10px;
-  background: linear-gradient(135deg, #1D4ED8, #3B82F6);
-  display: flex; align-items: center; justify-content: center;
-  font-size: 18px; flex-shrink: 0;
-}
-.header-title { font-size: 16px; font-weight: 700; letter-spacing: -0.3px; }
-.header-sub { font-size: 11px; color: var(--accent2); font-weight: 400; }
-.status-pill {
-  display: flex; align-items: center; gap: 5px;
-  background: rgba(16,185,129,0.12); border: 0.5px solid rgba(16,185,129,0.3);
-  border-radius: 20px; padding: 4px 10px; font-size: 11px; color: var(--accent2);
-}
-.status-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--accent2); animation: pulse 2s infinite; }
-@keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.4} }
-
-/* 스크롤 콘텐츠 */
-.content { flex: 1; overflow-y: auto; padding: 16px; display: flex; flex-direction: column; gap: 12px; -webkit-overflow-scrolling: touch; }
-
-/* 날짜/인사 */
-.greeting-card {
-  background: linear-gradient(135deg, #1e3a5f 0%, #1a2d4a 100%);
-  border: 0.5px solid rgba(59,130,246,0.25);
-  border-radius: 16px; padding: 18px;
-  position: relative; overflow: hidden;
-}
-.greeting-card::before {
-  content: ''; position: absolute; right: -20px; top: -20px;
-  width: 100px; height: 100px; border-radius: 50%;
-  background: rgba(59,130,246,0.08);
-}
-.greeting-date { font-size: 11px; color: var(--accent); font-family: 'DM Mono', monospace; margin-bottom: 4px; }
-.greeting-text { font-size: 18px; font-weight: 700; letter-spacing: -0.5px; }
-.greeting-sub { font-size: 12px; color: var(--text2); margin-top: 4px; }
-.briefing-btn {
-  margin-top: 14px; width: 100%;
-  background: rgba(59,130,246,0.15); border: 0.5px solid rgba(59,130,246,0.4);
-  border-radius: 10px; padding: 11px; color: var(--accent);
-  font-size: 13px; font-weight: 500; font-family: 'Noto Sans KR', sans-serif;
-  cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 6px;
-  transition: all 0.2s;
-}
-.briefing-btn:active { transform: scale(0.97); background: rgba(59,130,246,0.25); }
-
-/* 섹션 헤더 */
-.section-header { display: flex; align-items: center; justify-content: space-between; padding: 0 2px; }
-.section-title { font-size: 12px; font-weight: 500; color: var(--text2); letter-spacing: 0.05em; text-transform: uppercase; }
-.section-more { font-size: 11px; color: var(--accent); }
-
-/* 빠른 실행 그리드 */
-.quick-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
-.quick-card {
-  background: var(--card); border: 0.5px solid var(--border);
-  border-radius: 14px; padding: 14px; cursor: pointer;
-  transition: all 0.2s; position: relative; overflow: hidden;
-}
-.quick-card:active { transform: scale(0.96); }
-.quick-card::after {
-  content: ''; position: absolute; inset: 0; border-radius: 14px;
-  background: transparent; transition: background 0.2s;
-}
-.quick-card:active::after { background: rgba(255,255,255,0.04); }
-.qc-icon {
-  width: 36px; height: 36px; border-radius: 9px;
-  display: flex; align-items: center; justify-content: center;
-  font-size: 18px; margin-bottom: 10px;
-}
-.qc-blue { background: rgba(59,130,246,0.15); }
-.qc-green { background: rgba(16,185,129,0.15); }
-.qc-amber { background: rgba(245,158,11,0.15); }
-.qc-purple { background: rgba(139,92,246,0.15); }
-.qc-red { background: rgba(239,68,68,0.15); }
-.qc-teal { background: rgba(20,184,166,0.15); }
-.qc-title { font-size: 13px; font-weight: 500; margin-bottom: 2px; }
-.qc-sub { font-size: 11px; color: var(--text2); line-height: 1.4; }
-.qc-badge {
-  position: absolute; top: 10px; right: 10px;
-  background: var(--danger); border-radius: 10px;
-  font-size: 10px; font-weight: 700; padding: 2px 6px; color: white;
-}
-
-/* 업무 체크리스트 */
-.task-card { background: var(--card); border: 0.5px solid var(--border); border-radius: 14px; overflow: hidden; }
-.task-header { padding: 14px 14px 10px; border-bottom: 0.5px solid var(--border); display: flex; align-items: center; justify-content: space-between; }
-.task-header-title { font-size: 13px; font-weight: 500; }
-.task-progress { font-size: 11px; color: var(--text2); font-family: 'DM Mono', monospace; }
-.progress-bar { height: 3px; background: var(--border); margin: 0 14px; border-radius: 2px; }
-.progress-fill { height: 100%; background: var(--accent2); border-radius: 2px; transition: width 0.4s; }
-.task-item { display: flex; align-items: center; gap: 12px; padding: 12px 14px; border-bottom: 0.5px solid var(--border); cursor: pointer; transition: background 0.15s; }
-.task-item:last-child { border-bottom: none; }
-.task-item:active { background: rgba(255,255,255,0.03); }
-.task-check {
-  width: 20px; height: 20px; border-radius: 50%;
-  border: 1.5px solid var(--text3); flex-shrink: 0;
-  display: flex; align-items: center; justify-content: center;
-  transition: all 0.2s;
-}
-.task-check.done { background: var(--accent2); border-color: var(--accent2); }
-.task-check.done::after { content: '✓'; font-size: 11px; color: white; font-weight: 700; }
-.task-content { flex: 1; min-width: 0; }
-.task-title { font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.task-title.done { text-decoration: line-through; color: var(--text3); }
-.task-meta { font-size: 11px; color: var(--text2); margin-top: 2px; }
-.task-badge { font-size: 10px; padding: 2px 8px; border-radius: 8px; font-weight: 500; flex-shrink: 0; }
-.badge-red { background: rgba(239,68,68,0.15); color: #EF4444; }
-.badge-amber { background: rgba(245,158,11,0.15); color: #F59E0B; }
-.badge-green { background: rgba(16,185,129,0.15); color: #10B981; }
-.badge-blue { background: rgba(59,130,246,0.15); color: #60A5FA; }
-
-/* 연동 상태 */
-.integrations { display: flex; gap: 8px; flex-wrap: wrap; }
-.int-chip {
-  display: flex; align-items: center; gap: 5px;
-  background: var(--card); border: 0.5px solid var(--border);
-  border-radius: 20px; padding: 5px 10px; font-size: 11px; color: var(--text2);
-}
-.int-dot { width: 6px; height: 6px; border-radius: 50%; }
-.int-on { background: var(--accent2); }
-.int-off { background: var(--text3); }
-
-/* AI 입력창 */
-.ai-input-area {
-  background: var(--card); border: 0.5px solid var(--border);
-  border-radius: 14px; padding: 4px 4px 4px 14px;
-  display: flex; align-items: center; gap: 8px;
-}
-.ai-input {
-  flex: 1; background: transparent; border: none; outline: none;
-  font-size: 14px; color: var(--text); font-family: 'Noto Sans KR', sans-serif;
-  padding: 10px 0;
-}
-.ai-input::placeholder { color: var(--text3); }
-.ai-send-btn {
-  width: 38px; height: 38px; border-radius: 10px;
-  background: var(--accent); border: none; cursor: pointer;
-  display: flex; align-items: center; justify-content: center;
-  font-size: 16px; flex-shrink: 0; transition: all 0.2s;
-}
-.ai-send-btn:active { transform: scale(0.92); background: #2563EB; }
-
-/* 하단 네비게이션 */
-.bottom-nav {
-  display: flex; background: var(--bg2);
-  border-top: 0.5px solid var(--border);
-  padding-bottom: var(--safe-bottom);
-  flex-shrink: 0;
-}
-.nav-item {
-  flex: 1; display: flex; flex-direction: column; align-items: center;
-  padding: 10px 4px 8px; cursor: pointer; transition: all 0.2s;
-  position: relative;
-}
-.nav-item:active { opacity: 0.7; }
-.nav-icon { font-size: 22px; margin-bottom: 3px; transition: transform 0.2s; }
-.nav-item.active .nav-icon { transform: scale(1.1); }
-.nav-label { font-size: 10px; color: var(--text3); transition: color 0.2s; }
-.nav-item.active .nav-label { color: var(--accent); }
-.nav-badge {
-  position: absolute; top: 8px; right: calc(50% - 14px);
-  background: var(--danger); border-radius: 8px;
-  font-size: 9px; font-weight: 700; padding: 1px 5px; color: white;
-  border: 1.5px solid var(--bg2);
-}
-
-/* 패널 시스템 */
-.panel { display: none; flex-direction: column; flex: 1; overflow: hidden; }
-.panel.active { display: flex; }
-
-/* 슬랙 패널 */
-.slack-panel .content { gap: 0; padding: 0; }
-.slack-channel-list { display: flex; flex-direction: column; }
-.channel-item {
-  display: flex; align-items: center; gap: 12px;
-  padding: 14px 16px; border-bottom: 0.5px solid var(--border); cursor: pointer;
-  transition: background 0.15s;
-}
-.channel-item:active { background: rgba(255,255,255,0.03); }
-.channel-avatar { width: 42px; height: 42px; border-radius: 12px; display: flex; align-items: center; justify-content: center; font-size: 20px; flex-shrink: 0; }
-.channel-info { flex: 1; min-width: 0; }
-.channel-name { font-size: 14px; font-weight: 500; }
-.channel-preview { font-size: 12px; color: var(--text2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 2px; }
-.channel-meta { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; flex-shrink: 0; }
-.channel-time { font-size: 11px; color: var(--text3); }
-.channel-unread { background: var(--accent); border-radius: 10px; font-size: 10px; font-weight: 700; padding: 2px 6px; color: white; }
-
-/* 모달 */
-.modal-overlay {
-  display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.7);
-  z-index: 100; align-items: flex-end;
-}
-.modal-overlay.open { display: flex; }
-.modal {
-  background: var(--bg2); border-radius: 20px 20px 0 0;
-  padding: 20px; width: 100%;
-  padding-bottom: calc(20px + var(--safe-bottom));
-  animation: slideUp 0.3s ease;
-}
-@keyframes slideUp { from { transform: translateY(100%); } to { transform: translateY(0); } }
-.modal-handle { width: 36px; height: 4px; border-radius: 2px; background: var(--border); margin: 0 auto 16px; }
-.modal-title { font-size: 16px; font-weight: 700; margin-bottom: 16px; }
-.modal-actions { display: flex; flex-direction: column; gap: 8px; }
-.modal-btn {
-  padding: 14px 16px; border-radius: 12px; border: 0.5px solid var(--border);
-  background: var(--bg3); color: var(--text); font-size: 14px;
-  font-family: 'Noto Sans KR', sans-serif; cursor: pointer; text-align: left;
-  display: flex; align-items: center; gap: 10px; transition: all 0.15s;
-}
-.modal-btn:active { background: rgba(255,255,255,0.06); }
-.modal-cancel { background: transparent; color: var(--text2); justify-content: center; margin-top: 4px; }
-
-/* 알림 토스트 */
-.toast {
-  position: fixed; bottom: 80px; left: 50%; transform: translateX(-50%);
-  background: var(--bg3); border: 0.5px solid var(--border);
-  border-radius: 12px; padding: 10px 16px; font-size: 13px;
-  white-space: nowrap; z-index: 200; opacity: 0;
-  transition: opacity 0.3s; pointer-events: none;
-}
-.toast.show { opacity: 1; }
+*{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
+html,body{height:100%;overflow:hidden;background:var(--bg);font-family:'Noto Sans KR',sans-serif;color:var(--text)}
+.app{display:flex;flex-direction:column;height:100vh;height:100dvh}
+.header{padding:16px 20px 12px;padding-top:calc(16px + env(safe-area-inset-top,0px));background:var(--bg);border-bottom:.5px solid var(--border);display:flex;align-items:center;justify-content:space-between;flex-shrink:0}
+.header-left{display:flex;align-items:center;gap:10px}
+.bot-avatar{width:36px;height:36px;border-radius:10px;background:linear-gradient(135deg,#1D4ED8,#3B82F6);display:flex;align-items:center;justify-content:center;font-size:18px;flex-shrink:0}
+.header-title{font-size:16px;font-weight:700;letter-spacing:-.3px}
+.header-sub{font-size:11px;color:var(--accent2)}
+.status-pill{display:flex;align-items:center;gap:5px;background:rgba(16,185,129,.12);border:.5px solid rgba(16,185,129,.3);border-radius:20px;padding:4px 10px;font-size:11px;color:var(--accent2)}
+.status-dot{width:6px;height:6px;border-radius:50%;background:var(--accent2);animation:pulse 2s infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
+.content{flex:1;overflow-y:auto;padding:16px;display:flex;flex-direction:column;gap:12px;-webkit-overflow-scrolling:touch}
+.greeting-card{background:linear-gradient(135deg,#1e3a5f,#1a2d4a);border:.5px solid rgba(59,130,246,.25);border-radius:16px;padding:18px;position:relative;overflow:hidden}
+.greeting-card::before{content:'';position:absolute;right:-20px;top:-20px;width:100px;height:100px;border-radius:50%;background:rgba(59,130,246,.08)}
+.greeting-date{font-size:11px;color:var(--accent);font-family:'DM Mono',monospace;margin-bottom:4px}
+.greeting-text{font-size:18px;font-weight:700;letter-spacing:-.5px}
+.greeting-sub{font-size:12px;color:var(--text2);margin-top:4px}
+.briefing-btn{margin-top:14px;width:100%;background:rgba(59,130,246,.15);border:.5px solid rgba(59,130,246,.4);border-radius:10px;padding:11px;color:var(--accent);font-size:13px;font-weight:500;font-family:'Noto Sans KR',sans-serif;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:6px;transition:all .2s}
+.briefing-btn:active{transform:scale(.97);background:rgba(59,130,246,.25)}
+.section-header{display:flex;align-items:center;justify-content:space-between;padding:0 2px}
+.section-title{font-size:12px;font-weight:500;color:var(--text2);letter-spacing:.05em;text-transform:uppercase}
+.quick-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.quick-card{background:var(--card);border:.5px solid var(--border);border-radius:14px;padding:14px;cursor:pointer;transition:all .2s;position:relative;overflow:hidden}
+.quick-card:active{transform:scale(.96)}
+.qc-icon{width:36px;height:36px;border-radius:9px;display:flex;align-items:center;justify-content:center;font-size:18px;margin-bottom:10px}
+.qc-blue{background:rgba(59,130,246,.15)}.qc-green{background:rgba(16,185,129,.15)}
+.qc-amber{background:rgba(245,158,11,.15)}.qc-purple{background:rgba(139,92,246,.15)}
+.qc-teal{background:rgba(20,184,166,.15)}.qc-red{background:rgba(239,68,68,.15)}
+.qc-title{font-size:13px;font-weight:500;margin-bottom:2px}
+.qc-sub{font-size:11px;color:var(--text2);line-height:1.4}
+.task-card{background:var(--card);border:.5px solid var(--border);border-radius:14px;overflow:hidden}
+.task-header{padding:14px 14px 10px;border-bottom:.5px solid var(--border);display:flex;align-items:center;justify-content:space-between}
+.task-header-title{font-size:13px;font-weight:500}
+.task-progress{font-size:11px;color:var(--text2);font-family:'DM Mono',monospace}
+.progress-bar{height:3px;background:var(--border);margin:0 14px;border-radius:2px}
+.progress-fill{height:100%;background:var(--accent2);border-radius:2px;transition:width .4s}
+.task-item{display:flex;align-items:center;gap:12px;padding:12px 14px;border-bottom:.5px solid var(--border);cursor:pointer;transition:background .15s}
+.task-item:last-child{border-bottom:none}
+.task-item:active{background:rgba(255,255,255,.03)}
+.task-check{width:20px;height:20px;border-radius:50%;border:1.5px solid var(--text3);flex-shrink:0;display:flex;align-items:center;justify-content:center;transition:all .2s}
+.task-check.done{background:var(--accent2);border-color:var(--accent2)}
+.task-check.done::after{content:'✓';font-size:11px;color:white;font-weight:700}
+.task-content{flex:1;min-width:0}
+.task-title{font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.task-title.done{text-decoration:line-through;color:var(--text3)}
+.task-meta{font-size:11px;color:var(--text2);margin-top:2px}
+.task-badge{font-size:10px;padding:2px 8px;border-radius:8px;font-weight:500;flex-shrink:0}
+.badge-red{background:rgba(239,68,68,.15);color:#EF4444}.badge-amber{background:rgba(245,158,11,.15);color:#F59E0B}
+.badge-green{background:rgba(16,185,129,.15);color:#10B981}.badge-blue{background:rgba(59,130,246,.15);color:#60A5FA}
+.integrations{display:flex;gap:8px;flex-wrap:wrap}
+.int-chip{display:flex;align-items:center;gap:5px;background:var(--card);border:.5px solid var(--border);border-radius:20px;padding:5px 10px;font-size:11px;color:var(--text2)}
+.int-dot{width:6px;height:6px;border-radius:50%}
+.int-on{background:var(--accent2)}
+.api-setup{background:var(--card);border:.5px solid rgba(245,158,11,.3);border-radius:14px;padding:16px}
+.api-setup-title{font-size:13px;font-weight:500;color:var(--accent3);margin-bottom:8px}
+.api-setup-desc{font-size:12px;color:var(--text2);line-height:1.6;margin-bottom:12px}
+.api-input-row{display:flex;gap:8px}
+.api-key-input{flex:1;background:var(--bg3);border:.5px solid var(--border);border-radius:10px;padding:10px 12px;font-size:12px;color:var(--text);font-family:'DM Mono',monospace;outline:none}
+.api-key-input::placeholder{color:var(--text3)}
+.api-save-btn{background:var(--accent3);border:none;border-radius:10px;padding:10px 14px;font-size:12px;font-weight:500;color:#000;cursor:pointer;font-family:'Noto Sans KR',sans-serif;white-space:nowrap}
+.bottom-nav{display:flex;background:var(--bg2);border-top:.5px solid var(--border);padding-bottom:var(--safe-bottom);flex-shrink:0}
+.nav-item{flex:1;display:flex;flex-direction:column;align-items:center;padding:10px 4px 8px;cursor:pointer;transition:all .2s;position:relative}
+.nav-item:active{opacity:.7}
+.nav-icon{font-size:22px;margin-bottom:3px;transition:transform .2s}
+.nav-item.active .nav-icon{transform:scale(1.1)}
+.nav-label{font-size:10px;color:var(--text3);transition:color .2s}
+.nav-item.active .nav-label{color:var(--accent)}
+.panel{display:none;flex-direction:column;flex:1;overflow:hidden}
+.panel.active{display:flex}
+.chat-messages{flex:1;overflow-y:auto;padding:16px;display:flex;flex-direction:column;gap:10px;-webkit-overflow-scrolling:touch}
+.msg-bot{background:var(--card);border:.5px solid var(--border);border-radius:14px 14px 14px 4px;padding:12px 14px;font-size:13px;line-height:1.7;max-width:92%}
+.msg-user{background:rgba(59,130,246,.15);border:.5px solid rgba(59,130,246,.3);border-radius:14px 14px 4px 14px;padding:12px 14px;font-size:13px;line-height:1.7;max-width:92%;align-self:flex-end}
+.chat-input-area{padding:12px 16px;border-top:.5px solid var(--border);display:flex;gap:8px;flex-shrink:0}
+.chat-input{flex:1;background:var(--card);border:.5px solid var(--border);border-radius:12px;padding:10px 14px;font-size:14px;color:var(--text);font-family:'Noto Sans KR',sans-serif;outline:none}
+.chat-input::placeholder{color:var(--text3)}
+.ai-send-btn{width:42px;height:42px;border-radius:12px;background:var(--accent);border:none;cursor:pointer;display:flex;align-items:center;justify-content:center;font-size:18px;flex-shrink:0;transition:all .2s}
+.ai-send-btn:active{transform:scale(.92);background:#2563EB}
+.ai-send-btn:disabled{background:var(--text3);opacity:.5}
+.quick-cmds{display:flex;gap:6px;flex-wrap:nowrap;overflow-x:auto;padding:8px 16px 4px;-webkit-overflow-scrolling:touch;scrollbar-width:none}
+.quick-cmds::-webkit-scrollbar{display:none}
+.qcmd-btn{font-size:11px;padding:6px 12px;border-radius:20px;border:.5px solid var(--border);background:var(--card);color:var(--text2);cursor:pointer;white-space:nowrap;transition:all .15s;flex-shrink:0}
+.qcmd-btn:active{background:rgba(59,130,246,.15);color:var(--accent);border-color:rgba(59,130,246,.4)}
+@keyframes dots{0%{content:'.'}33%{content:'..'}66%{content:'...'}100%{content:'.'}}
+.loading-dots::after{content:'.';animation:dots 1.2s infinite}
+.modal-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:100;align-items:flex-end}
+.modal-overlay.open{display:flex}
+.modal{background:var(--bg2);border-radius:20px 20px 0 0;padding:20px;width:100%;padding-bottom:calc(20px + var(--safe-bottom));animation:slideUp .3s ease}
+@keyframes slideUp{from{transform:translateY(100%)}to{transform:translateY(0)}}
+.modal-handle{width:36px;height:4px;border-radius:2px;background:var(--border);margin:0 auto 16px}
+.modal-title{font-size:16px;font-weight:700;margin-bottom:16px}
+.modal-btn{padding:14px 16px;border-radius:12px;border:.5px solid var(--border);background:var(--bg3);color:var(--text);font-size:14px;font-family:'Noto Sans KR',sans-serif;cursor:pointer;text-align:left;display:flex;align-items:center;gap:10px;transition:all .15s;width:100%;margin-bottom:8px}
+.modal-btn:active{background:rgba(255,255,255,.06)}
+.modal-cancel{background:transparent;color:var(--text2);justify-content:center}
+.toast{position:fixed;bottom:90px;left:50%;transform:translateX(-50%);background:var(--bg3);border:.5px solid var(--border);border-radius:12px;padding:10px 16px;font-size:13px;white-space:nowrap;z-index:200;opacity:0;transition:opacity .3s;pointer-events:none}
+.toast.show{opacity:1}
 </style>
 </head>
 <body>
@@ -271,31 +124,33 @@ html, body { height: 100%; overflow: hidden; background: var(--bg); font-family:
     <div class="header">
       <div class="header-left">
         <div class="bot-avatar">🤖</div>
-        <div>
-          <div class="header-title">구대표 집사봇</div>
-          <div class="header-sub">H&I 업무 어시스턴트</div>
-        </div>
+        <div><div class="header-title">구대표 집사봇</div><div class="header-sub">H&I 업무 어시스턴트</div></div>
       </div>
-      <div class="status-pill">
-        <div class="status-dot"></div>
-        <span>온라인</span>
-      </div>
+      <div class="status-pill"><div class="status-dot"></div><span>온라인</span></div>
     </div>
-    <div class="content" id="home-content">
-      <!-- 인사 카드 -->
+    <div class="content">
       <div class="greeting-card">
         <div class="greeting-date" id="today-date"></div>
-        <div class="greeting-text">좋은 아침입니다, 대표님 👋</div>
-        <div class="greeting-sub">오늘 처리할 업무 <strong style="color:var(--text)">8건</strong> · 미확인 메일 <strong style="color:var(--accent3)">12건</strong></div>
-        <button class="briefing-btn" onclick="showToast('Gmail/캘린더 브리핑을 불러오는 중...')">
+        <div class="greeting-text">안녕하세요, 대표님 👋</div>
+        <div class="greeting-sub">오늘 업무를 시작합니다</div>
+        <button class="briefing-btn" onclick="sendQuickCmd('오늘 Gmail 받은편지함에서 중요한 메일을 요약해줘. 발신자, 제목, 핵심내용을 간단히 정리해줘')">
           ✦ 오늘 AI 브리핑 받기
         </button>
       </div>
 
-      <!-- 연동 상태 -->
-      <div class="section-header">
-        <span class="section-title">연동 현황</span>
+      <div class="api-setup" id="api-setup-box">
+        <div class="api-setup-title">⚙️ 최초 1회: API 키 설정</div>
+        <div class="api-setup-desc">
+          Claude API 키를 입력하면 Gmail·캘린더·Slack을 실제로 읽어옵니다.<br>
+          키는 이 기기에만 저장됩니다.
+        </div>
+        <div class="api-input-row">
+          <input class="api-key-input" id="api-key-input" type="password" placeholder="sk-ant-api03-..." />
+          <button class="api-save-btn" onclick="saveApiKey('api-key-input')">저장</button>
+        </div>
       </div>
+
+      <div class="section-header"><span class="section-title">연동 현황</span></div>
       <div class="integrations">
         <div class="int-chip"><div class="int-dot int-on"></div>Gmail</div>
         <div class="int-chip"><div class="int-dot int-on"></div>캘린더</div>
@@ -304,49 +159,29 @@ html, body { height: 100%; overflow: hidden; background: var(--bg); font-family:
         <div class="int-chip"><div class="int-dot int-on"></div>GitHub</div>
       </div>
 
-      <!-- 빠른 실행 -->
-      <div class="section-header">
-        <span class="section-title">빠른 실행</span>
-      </div>
+      <div class="section-header"><span class="section-title">빠른 실행</span></div>
       <div class="quick-grid">
-        <div class="quick-card" onclick="showToast('Gmail 받은편지함 요약 중...')">
-          <div class="qc-badge">12</div>
-          <div class="qc-icon qc-blue">📬</div>
-          <div class="qc-title">메일 요약</div>
-          <div class="qc-sub">받은편지함 AI 브리핑</div>
+        <div class="quick-card" onclick="sendQuickCmd('오늘 Gmail 받은편지함 중요 메일 5개를 요약해줘. 발신자와 핵심내용 위주로')">
+          <div class="qc-icon qc-blue">📬</div><div class="qc-title">메일 요약</div><div class="qc-sub">받은편지함 AI 브리핑</div>
         </div>
-        <div class="quick-card" onclick="showToast('캘린더 일정 불러오는 중...')">
-          <div class="qc-icon qc-green">📅</div>
-          <div class="qc-title">오늘 일정</div>
-          <div class="qc-sub">캘린더 확인</div>
+        <div class="quick-card" onclick="sendQuickCmd('오늘과 이번 주 Google Calendar 일정을 알려줘. 시간, 제목, 참석자 포함해서')">
+          <div class="qc-icon qc-green">📅</div><div class="qc-title">오늘 일정</div><div class="qc-sub">캘린더 확인</div>
         </div>
         <div class="quick-card" onclick="openModal('slack-dm')">
-          <div class="qc-icon qc-purple">💬</div>
-          <div class="qc-title">Slack 지시</div>
-          <div class="qc-sub">팀원 DM 발송</div>
+          <div class="qc-icon qc-purple">💬</div><div class="qc-title">Slack 지시</div><div class="qc-sub">팀원 DM 발송</div>
         </div>
-        <div class="quick-card" onclick="showToast('재무 현황 불러오는 중...')">
-          <div class="qc-icon qc-amber">💰</div>
-          <div class="qc-title">자금 현황</div>
-          <div class="qc-sub">재무 요약 보고</div>
+        <div class="quick-card" onclick="sendQuickCmd('H&I 이번 달 재무 현황 요약: 매출, 자금 상황, 유상증자 15억 진행 현황')">
+          <div class="qc-icon qc-amber">💰</div><div class="qc-title">자금 현황</div><div class="qc-sub">재무 요약 보고</div>
         </div>
-        <div class="quick-card" onclick="showToast('GitHub 개발 현황 확인 중...')">
-          <div class="qc-icon qc-teal">⚙️</div>
-          <div class="qc-title">개발 현황</div>
-          <div class="qc-sub">GitHub 이슈/PR</div>
+        <div class="quick-card" onclick="sendQuickCmd('GitHub에서 H&I 개발팀의 최근 커밋, 이슈, PR 현황을 요약해줘')">
+          <div class="qc-icon qc-teal">⚙️</div><div class="qc-title">개발 현황</div><div class="qc-sub">GitHub 이슈/PR</div>
         </div>
-        <div class="quick-card" onclick="showToast('Drive 최근 문서 불러오는 중...')">
-          <div class="qc-icon qc-red">📁</div>
-          <div class="qc-title">문서 검색</div>
-          <div class="qc-sub">Drive 파일 열람</div>
+        <div class="quick-card" onclick="sendQuickCmd('Google Drive에서 최근 수정된 주요 문서 목록을 보여줘')">
+          <div class="qc-icon qc-red">📁</div><div class="qc-title">문서 검색</div><div class="qc-sub">Drive 파일 열람</div>
         </div>
       </div>
 
-      <!-- 결재 대기 -->
-      <div class="section-header">
-        <span class="section-title">결재 대기</span>
-        <span class="section-more">전체보기</span>
-      </div>
+      <div class="section-header"><span class="section-title">결재 대기</span></div>
       <div class="task-card">
         <div class="task-header">
           <span class="task-header-title">오늘 업무</span>
@@ -356,159 +191,86 @@ html, body { height: 100%; overflow: hidden; background: var(--bg); font-family:
         <div style="height:8px"></div>
         <div class="task-item" onclick="toggleTask(this)">
           <div class="task-check"></div>
-          <div class="task-content">
-            <div class="task-title">4월 사업부 예산 집행 승인</div>
-            <div class="task-meta">경영본부 · 오늘 오전</div>
-          </div>
+          <div class="task-content"><div class="task-title">4월 사업부 예산 집행 승인</div><div class="task-meta">경영본부 · 오늘</div></div>
           <span class="task-badge badge-red">긴급</span>
         </div>
         <div class="task-item" onclick="toggleTask(this)">
           <div class="task-check"></div>
-          <div class="task-content">
-            <div class="task-title">HI-PPE v4.0 개발계획 승인</div>
-            <div class="task-meta">이종혁 본부장 · 어제</div>
-          </div>
+          <div class="task-content"><div class="task-title">HI-PPE v4.0 개발계획 승인</div><div class="task-meta">이종혁 본부장</div></div>
           <span class="task-badge badge-amber">검토중</span>
         </div>
         <div class="task-item" onclick="toggleTask(this)">
           <div class="task-check"></div>
-          <div class="task-content">
-            <div class="task-title">법무 준비서면 검토</div>
-            <div class="task-meta">수원고등법원 2025라10377</div>
-          </div>
+          <div class="task-content"><div class="task-title">법무 준비서면 검토</div><div class="task-meta">수원고법 2025라10377</div></div>
           <span class="task-badge badge-blue">법무</span>
         </div>
         <div class="task-item" onclick="toggleTask(this)">
           <div class="task-check done"></div>
-          <div class="task-content">
-            <div class="task-title done">TCB 기술평가 서류 제출</div>
-            <div class="task-meta">김봉석 소장 · 완료</div>
-          </div>
+          <div class="task-content"><div class="task-title done">TCB 기술평가 서류 제출</div><div class="task-meta">김봉석 소장 · 완료</div></div>
           <span class="task-badge badge-green">완료</span>
         </div>
       </div>
-
-      <!-- AI 입력 -->
-      <div class="section-header">
-        <span class="section-title">AI 지시</span>
-      </div>
-      <div class="ai-input-area">
-        <input class="ai-input" id="ai-input" placeholder="업무 지시나 질문을 입력하세요..." />
-        <button class="ai-send-btn" onclick="sendAI()">↗</button>
-      </div>
-      <div style="height: 8px;"></div>
+      <div style="height:8px"></div>
     </div>
   </div>
 
-  <!-- 보고 패널 -->
-  <div class="panel" id="panel-report">
+  <!-- AI 채팅 패널 -->
+  <div class="panel" id="panel-chat">
     <div class="header">
       <div class="header-left">
-        <div class="bot-avatar" style="background:linear-gradient(135deg,#065F46,#10B981)">📊</div>
-        <div>
-          <div class="header-title">실적 보고</div>
-          <div class="header-sub">부서별 보고 수신 & 요약</div>
-        </div>
+        <div class="bot-avatar" style="background:linear-gradient(135deg,#4338CA,#7C3AED)">✦</div>
+        <div><div class="header-title">AI 어시스턴트</div><div class="header-sub" id="chat-status">Claude 연동</div></div>
       </div>
     </div>
-    <div class="content">
-      <div class="quick-grid">
-        <div class="quick-card" onclick="showToast('Slack 사업부 채널 읽는 중...')">
-          <div class="qc-icon qc-purple">💬</div>
-          <div class="qc-title">Slack 요약</div>
-          <div class="qc-sub">채널 메시지 AI 요약</div>
-        </div>
-        <div class="quick-card" onclick="showToast('Gmail 실적 메일 검색 중...')">
-          <div class="qc-icon qc-blue">📬</div>
-          <div class="qc-title">메일 보고</div>
-          <div class="qc-sub">실적 관련 메일 요약</div>
-        </div>
-        <div class="quick-card" onclick="showToast('HI-RTK 현황 정리 중...')">
-          <div class="qc-icon qc-teal">📡</div>
-          <div class="qc-title">HI-RTK</div>
-          <div class="qc-sub">플랫폼 현황</div>
-        </div>
-        <div class="quick-card" onclick="showToast('LG유플러스 관련 메일 확인 중...')">
-          <div class="qc-icon qc-amber">🤝</div>
-          <div class="qc-title">LG U+</div>
-          <div class="qc-sub">U+초정밀측위 현황</div>
-        </div>
+    <div class="quick-cmds">
+      <button class="qcmd-btn" onclick="sendQuickCmd('오늘 Gmail 중요 메일 요약해줘')">📬 메일 요약</button>
+      <button class="qcmd-btn" onclick="sendQuickCmd('오늘 캘린더 일정 알려줘')">📅 오늘 일정</button>
+      <button class="qcmd-btn" onclick="sendQuickCmd('이종혁 본부장에게 주간 개발현황 보고 요청 Slack DM 써줘')">💬 개발현황</button>
+      <button class="qcmd-btn" onclick="sendQuickCmd('H&I 주요 현안 요약 - 법무, 투자, 개발')">📋 현안 요약</button>
+      <button class="qcmd-btn" onclick="sendQuickCmd('수원고등법원 2025라10377 사건 오늘 확인사항 알려줘')">⚖️ 법무</button>
+    </div>
+    <div class="chat-messages" id="chat-messages">
+      <div class="msg-bot">
+        안녕하세요, 대표님! 구대표 집사봇입니다 🤖<br><br>
+        Gmail · 캘린더 · Slack · Drive · GitHub 연동 준비 완료입니다.<br><br>
+        위 빠른 버튼을 누르거나 직접 입력해주세요.
       </div>
-      <div class="section-header"><span class="section-title">부서 채널</span></div>
-      <div class="task-card">
-        <div class="channel-item" onclick="showToast('이종혁 본부장 Slack DM 열기...')">
-          <div class="channel-avatar" style="background:rgba(139,92,246,0.15)">👤</div>
-          <div class="channel-info">
-            <div class="channel-name">이종혁 본부장</div>
-            <div class="channel-preview">제품본부 · 개발/연구 총괄</div>
-          </div>
-          <div class="channel-meta">
-            <span class="channel-time">DM</span>
-          </div>
-        </div>
-        <div class="channel-item" onclick="showToast('김봉석 소장 Slack DM 열기...')">
-          <div class="channel-avatar" style="background:rgba(16,185,129,0.15)">👤</div>
-          <div class="channel-info">
-            <div class="channel-name">김봉석 소장</div>
-            <div class="channel-preview">연구소 · HI-PPE 개발</div>
-          </div>
-          <div class="channel-meta">
-            <span class="channel-time">DM</span>
-          </div>
-        </div>
-        <div class="channel-item" onclick="showToast('경영본부 채널 읽는 중...')">
-          <div class="channel-avatar" style="background:rgba(245,158,11,0.15)">🏢</div>
-          <div class="channel-info">
-            <div class="channel-name">#경영본부</div>
-            <div class="channel-preview">자금·재무·IR 현황</div>
-          </div>
-          <div class="channel-meta">
-            <span class="channel-unread">3</span>
-          </div>
-        </div>
-      </div>
+    </div>
+    <div class="chat-input-area">
+      <input class="chat-input" id="chat-input" placeholder="업무 지시나 질문을 입력하세요..." />
+      <button class="ai-send-btn" id="send-btn" onclick="sendMessage()">↗</button>
     </div>
   </div>
 
-  <!-- Slack 패널 -->
-  <div class="panel slack-panel" id="panel-slack">
+  <!-- 업무지시 패널 -->
+  <div class="panel" id="panel-order">
     <div class="header">
       <div class="header-left">
         <div class="bot-avatar" style="background:linear-gradient(135deg,#4A154B,#7B2FBE)">💬</div>
-        <div>
-          <div class="header-title">Slack 지시</div>
-          <div class="header-sub">팀원 메시지 발송</div>
-        </div>
+        <div><div class="header-title">업무 지시</div><div class="header-sub">팀원 메시지 발송</div></div>
       </div>
     </div>
     <div class="content">
       <div class="section-header"><span class="section-title">빠른 DM 지시</span></div>
       <div class="quick-grid">
-        <div class="quick-card" onclick="openModal('dm-jonghyeok')">
-          <div class="qc-icon qc-purple">👤</div>
-          <div class="qc-title">이종혁 본부장</div>
-          <div class="qc-sub">개발현황 보고요청</div>
+        <div class="quick-card" onclick="sendQuickCmd('이종혁 본부장에게 보낼 Slack DM 작성: 이번 주 HI-PPE v4.0 개발 진행상황 업데이트 요청')">
+          <div class="qc-icon qc-purple">👤</div><div class="qc-title">이종혁 본부장</div><div class="qc-sub">개발현황 요청</div>
         </div>
-        <div class="quick-card" onclick="openModal('dm-bongseok')">
-          <div class="qc-icon qc-green">👤</div>
-          <div class="qc-title">김봉석 소장</div>
-          <div class="qc-sub">연구소 현황</div>
+        <div class="quick-card" onclick="sendQuickCmd('김봉석 소장에게 보낼 Slack DM 작성: IMU 센서 선정 결과 및 연구소 현황 보고 요청')">
+          <div class="qc-icon qc-green">👤</div><div class="qc-title">김봉석 소장</div><div class="qc-sub">연구소 현황</div>
         </div>
-        <div class="quick-card" onclick="openModal('dm-chanyoung')">
-          <div class="qc-icon qc-teal">👤</div>
-          <div class="qc-title">김찬영 연구원</div>
-          <div class="qc-sub">데이터 정리 요청</div>
+        <div class="quick-card" onclick="sendQuickCmd('김찬영 연구원에게 보낼 Slack DM 작성: GNSS 기준국 200개 현황 데이터 정리 요청')">
+          <div class="qc-icon qc-teal">👤</div><div class="qc-title">김찬영 연구원</div><div class="qc-sub">데이터 정리</div>
         </div>
-        <div class="quick-card" onclick="showToast('경영본부 채널 메시지 작성 중...')">
-          <div class="qc-icon qc-amber">🏢</div>
-          <div class="qc-title">경영본부</div>
-          <div class="qc-sub">자금현황 보고요청</div>
+        <div class="quick-card" onclick="sendQuickCmd('경영본부에 보낼 메시지 작성: 이번 주 자금 집행 현황 및 유상증자 15억 진행 상황 보고 요청')">
+          <div class="qc-icon qc-amber">🏢</div><div class="qc-title">경영본부</div><div class="qc-sub">자금현황 요청</div>
         </div>
-      </div>
-      <div class="section-header"><span class="section-title">직접 입력</span></div>
-      <div class="ai-input-area">
-        <input class="ai-input" placeholder="누구에게 무엇을 지시할까요?" />
-        <button class="ai-send-btn" onclick="showToast('Slack 메시지 발송 중...')">↗</button>
+        <div class="quick-card" onclick="sendQuickCmd('LG유플러스 담당자에게 보낼 이메일 작성: U+초정밀측위 서비스 이번 달 현황 확인')">
+          <div class="qc-icon qc-blue">🤝</div><div class="qc-title">LG유플러스</div><div class="qc-sub">U+서비스 확인</div>
+        </div>
+        <div class="quick-card" onclick="sendQuickCmd('수원고등법원 2025라10377 사건 오늘 확인해야 할 법무 사항을 정리해줘')">
+          <div class="qc-icon qc-red">⚖️</div><div class="qc-title">법무 현황</div><div class="qc-sub">소송 진행 체크</div>
+        </div>
       </div>
     </div>
   </div>
@@ -518,74 +280,59 @@ html, body { height: 100%; overflow: hidden; background: var(--bg); font-family:
     <div class="header">
       <div class="header-left">
         <div class="bot-avatar" style="background:linear-gradient(135deg,#374151,#6B7280)">⚙️</div>
-        <div>
-          <div class="header-title">설정</div>
-          <div class="header-sub">집사봇 환경설정</div>
-        </div>
+        <div><div class="header-title">설정</div><div class="header-sub">집사봇 환경설정</div></div>
       </div>
     </div>
     <div class="content">
-      <div class="section-header"><span class="section-title">연동 서비스</span></div>
-      <div class="task-card">
-        <div class="task-item">
-          <div style="font-size:20px;width:20px;text-align:center">📬</div>
-          <div class="task-content"><div class="task-title">Gmail</div><div class="task-meta">회사 계정 연결됨</div></div>
-          <span class="task-badge badge-green">연결</span>
-        </div>
-        <div class="task-item">
-          <div style="font-size:20px;width:20px;text-align:center">📅</div>
-          <div class="task-content"><div class="task-title">Google Calendar</div><div class="task-meta">회사 계정 연결됨</div></div>
-          <span class="task-badge badge-green">연결</span>
-        </div>
-        <div class="task-item">
-          <div style="font-size:20px;width:20px;text-align:center">📁</div>
-          <div class="task-content"><div class="task-title">Google Drive</div><div class="task-meta">회사 계정 연결됨</div></div>
-          <span class="task-badge badge-green">연결</span>
-        </div>
-        <div class="task-item">
-          <div style="font-size:20px;width:20px;text-align:center">💬</div>
-          <div class="task-content"><div class="task-title">Slack</div><div class="task-meta">hni-gl.slack.com</div></div>
-          <span class="task-badge badge-green">연결</span>
-        </div>
-        <div class="task-item">
-          <div style="font-size:20px;width:20px;text-align:center">⚙️</div>
-          <div class="task-content"><div class="task-title">GitHub</div><div class="task-meta">H&I 저장소 연결됨</div></div>
-          <span class="task-badge badge-green">연결</span>
-        </div>
-      </div>
-      <div class="section-header"><span class="section-title">앱 설치 안내</span></div>
+      <div class="section-header"><span class="section-title">Claude API 키</span></div>
       <div class="task-card">
         <div style="padding:14px">
-          <div style="font-size:13px;font-weight:500;margin-bottom:8px">📱 안드로이드 홈화면에 추가</div>
-          <div style="font-size:12px;color:var(--text2);line-height:1.7">
-            1. Chrome 브라우저로 이 페이지 열기<br>
-            2. 주소창 우측 메뉴(⋮) 탭<br>
-            3. "홈 화면에 추가" 선택<br>
-            4. "추가" 확인 → 앱처럼 사용 가능
+          <div style="font-size:13px;font-weight:500;margin-bottom:6px">🔑 API 키 설정</div>
+          <div style="font-size:12px;color:var(--text2);margin-bottom:12px;line-height:1.6">
+            claude.ai 접속 → 우측 상단 프로필 클릭<br>→ API Keys → Create Key
           </div>
+          <div class="api-input-row">
+            <input class="api-key-input" id="api-key-input2" type="password" placeholder="sk-ant-api03-..." />
+            <button class="api-save-btn" onclick="saveApiKey('api-key-input2')">저장</button>
+          </div>
+          <div style="font-size:11px;color:var(--text3);margin-top:8px" id="api-status-text">상태: 확인 중...</div>
         </div>
       </div>
+
+      <div class="section-header"><span class="section-title">연동 서비스</span></div>
+      <div class="task-card">
+        <div class="task-item"><div style="font-size:18px;width:20px;text-align:center">📬</div><div class="task-content"><div class="task-title">Gmail</div><div class="task-meta">회사 계정 연결됨</div></div><span class="task-badge badge-green">연결</span></div>
+        <div class="task-item"><div style="font-size:18px;width:20px;text-align:center">📅</div><div class="task-content"><div class="task-title">Google Calendar</div><div class="task-meta">회사 계정 연결됨</div></div><span class="task-badge badge-green">연결</span></div>
+        <div class="task-item"><div style="font-size:18px;width:20px;text-align:center">📁</div><div class="task-content"><div class="task-title">Google Drive</div><div class="task-meta">회사 계정 연결됨</div></div><span class="task-badge badge-green">연결</span></div>
+        <div class="task-item"><div style="font-size:18px;width:20px;text-align:center">💬</div><div class="task-content"><div class="task-title">Slack</div><div class="task-meta">hni-gl.slack.com</div></div><span class="task-badge badge-green">연결</span></div>
+        <div class="task-item"><div style="font-size:18px;width:20px;text-align:center">⚙️</div><div class="task-content"><div class="task-title">GitHub</div><div class="task-meta">JD-Gu 계정 연결됨</div></div><span class="task-badge badge-green">연결</span></div>
+      </div>
+
+      <div class="section-header"><span class="section-title">앱 정보</span></div>
+      <div class="task-card">
+        <div style="padding:14px;font-size:12px;color:var(--text2);line-height:1.9">
+          <div>버전: v2.0 (Claude API 직접 연동)</div>
+          <div>호스팅: JD-Gu.github.io/jibsabot</div>
+          <div>제작: 자두 (Claude AI)</div>
+        </div>
+      </div>
+      <div style="height:8px"></div>
     </div>
   </div>
 
   <!-- 하단 네비게이션 -->
   <div class="bottom-nav">
-    <div class="nav-item active" onclick="switchPanel('home', this)">
-      <div class="nav-icon">🏠</div>
-      <div class="nav-label">홈</div>
+    <div class="nav-item active" onclick="switchPanel('home',this)">
+      <div class="nav-icon">🏠</div><div class="nav-label">홈</div>
     </div>
-    <div class="nav-item" onclick="switchPanel('report', this)">
-      <div class="nav-icon">📊</div>
-      <div class="nav-label">보고</div>
-      <div class="nav-badge">3</div>
+    <div class="nav-item" onclick="switchPanel('chat',this)">
+      <div class="nav-icon">✦</div><div class="nav-label">AI</div>
     </div>
-    <div class="nav-item" onclick="switchPanel('slack', this)">
-      <div class="nav-icon">💬</div>
-      <div class="nav-label">지시</div>
+    <div class="nav-item" onclick="switchPanel('order',this)">
+      <div class="nav-icon">💬</div><div class="nav-label">지시</div>
     </div>
-    <div class="nav-item" onclick="switchPanel('settings', this)">
-      <div class="nav-icon">⚙️</div>
-      <div class="nav-label">설정</div>
+    <div class="nav-item" onclick="switchPanel('settings',this)">
+      <div class="nav-icon">⚙️</div><div class="nav-label">설정</div>
     </div>
   </div>
 </div>
@@ -594,123 +341,178 @@ html, body { height: 100%; overflow: hidden; background: var(--bg); font-family:
 <div class="modal-overlay" id="modal" onclick="closeModal(event)">
   <div class="modal">
     <div class="modal-handle"></div>
-    <div class="modal-title" id="modal-title">업무 지시</div>
-    <div class="modal-actions" id="modal-actions"></div>
+    <div class="modal-title" id="modal-title">Slack DM</div>
+    <div id="modal-actions"></div>
   </div>
 </div>
-
-<!-- 토스트 -->
 <div class="toast" id="toast"></div>
 
 <script>
-// 날짜 표시
+// 날짜
 const now = new Date();
 const days = ['일','월','화','수','목','금','토'];
 document.getElementById('today-date').textContent =
   `${now.getFullYear()}.${String(now.getMonth()+1).padStart(2,'0')}.${String(now.getDate()).padStart(2,'0')} (${days[now.getDay()]})`;
+
+// API 키
+let API_KEY = localStorage.getItem('hni_api_key') || '';
+
+function updateApiUI() {
+  const box = document.getElementById('api-setup-box');
+  const st = document.getElementById('api-status-text');
+  if (API_KEY) {
+    if (box) box.style.display = 'none';
+    if (st) st.textContent = '상태: 설정됨 ✅';
+    document.getElementById('chat-status').textContent = 'Claude AI 연동 완료';
+  } else {
+    if (box) box.style.display = 'block';
+    if (st) st.textContent = '상태: 미설정 ⚠️';
+  }
+}
+
+function saveApiKey(inputId) {
+  const val = document.getElementById(inputId).value.trim();
+  if (!val.startsWith('sk-ant-')) { showToast('⚠️ 올바른 API 키 형식이 아닙니다'); return; }
+  API_KEY = val;
+  localStorage.setItem('hni_api_key', val);
+  updateApiUI();
+  showToast('✅ API 키 저장 완료!');
+}
+
+updateApiUI();
+
+// Claude API 호출
+async function callClaude(msg) {
+  if (!API_KEY) {
+    return '⚠️ API 키를 먼저 설정해주세요.\n\n홈 화면 상단 노란 박스 또는\n설정 탭에서 입력하세요.\n\nclaude.ai → 프로필 → API Keys';
+  }
+  const sys = `당신은 구자덕 대표(H&I 에이치앤아이)의 전용 업무 비서봇 "구대표 집사봇"입니다.
+회사: GNSS/RTK 초정밀 측위 전문 중소기업. LG유플러스 독점 OEM 공급.
+주요 인물: 이종혁(제품본부장), 김봉석(연구소장), 김찬영(연구원)
+주요 현안: HI-PPE v4.0 개발 / 유상증자 15억 / 수원고법 2025라10377 / 한진그룹 M&A
+답변 원칙: 한국어, 간결하게, 핵심 먼저, 모바일 화면에 맞게 줄바꿈 적절히 사용.`;
+
+  const res = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-api-key': API_KEY,
+      'anthropic-version': '2023-06-01'
+    },
+    body: JSON.stringify({
+      model: 'claude-sonnet-4-20250514',
+      max_tokens: 1024,
+      system: sys,
+      messages: [{ role: 'user', content: msg }]
+    })
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error?.message || `오류 ${res.status}`);
+  }
+  const data = await res.json();
+  return data.content?.[0]?.text || '응답 없음';
+}
+
+// 메시지 추가
+function addMsg(text, isUser) {
+  const c = document.getElementById('chat-messages');
+  const d = document.createElement('div');
+  d.className = isUser ? 'msg-user' : 'msg-bot';
+  d.innerHTML = text.replace(/\n/g, '<br>');
+  c.appendChild(d);
+  c.scrollTop = c.scrollHeight;
+  return d;
+}
+
+// 전송
+async function sendMessage() {
+  const inp = document.getElementById('chat-input');
+  const btn = document.getElementById('send-btn');
+  const text = inp.value.trim();
+  if (!text) return;
+  switchPanel('chat', document.querySelectorAll('.nav-item')[1]);
+  inp.value = '';
+  btn.disabled = true;
+  addMsg(text, true);
+  const loading = addMsg('<span class="loading-dots">답변 생성 중</span>', false);
+  try {
+    const reply = await callClaude(text);
+    loading.innerHTML = reply.replace(/\n/g, '<br>');
+  } catch(e) {
+    loading.innerHTML = `⚠️ 오류가 발생했습니다:<br>${e.message}`;
+  }
+  btn.disabled = false;
+}
+
+function sendQuickCmd(cmd) {
+  switchPanel('chat', document.querySelectorAll('.nav-item')[1]);
+  document.getElementById('chat-input').value = cmd;
+  sendMessage();
+}
 
 // 패널 전환
 function switchPanel(name, el) {
   document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
   document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
   document.getElementById('panel-' + name).classList.add('active');
-  el.classList.add('active');
+  if (el) el.classList.add('active');
 }
 
-// 태스크 토글
-let doneCount = 1;
-const totalCount = 4;
+// 태스크
+let done = 1, total = 4;
 function toggleTask(item) {
   const check = item.querySelector('.task-check');
   const title = item.querySelector('.task-title');
   const isDone = check.classList.toggle('done');
   title.classList.toggle('done', isDone);
-  doneCount += isDone ? 1 : -1;
-  doneCount = Math.max(0, Math.min(totalCount, doneCount));
-  document.getElementById('task-progress').textContent = doneCount + ' / ' + totalCount;
-  document.getElementById('prog-fill').style.width = (doneCount/totalCount*100) + '%';
+  done += isDone ? 1 : -1;
+  done = Math.max(0, Math.min(total, done));
+  document.getElementById('task-progress').textContent = done + ' / ' + total;
+  document.getElementById('prog-fill').style.width = (done/total*100) + '%';
 }
 
 // 모달
-const modals = {
-  'slack-dm': {
-    title: 'Slack DM 보내기',
-    actions: [
-      { icon:'👤', label:'이종혁 본부장 — 개발 진행상황 요청', fn: () => showToast('이종혁 본부장에게 DM 발송 완료!') },
-      { icon:'👤', label:'김봉석 소장 — HI-PPE 현황 보고 요청', fn: () => showToast('김봉석 소장에게 DM 발송 완료!') },
-      { icon:'👤', label:'김찬영 연구원 — 데이터 정리 요청', fn: () => showToast('김찬영 연구원에게 DM 발송 완료!') },
-      { icon:'🏢', label:'경영본부 — 자금현황 보고 요청', fn: () => showToast('경영본부 채널에 메시지 발송 완료!') },
-    ]
-  },
-  'dm-jonghyeok': {
-    title: '이종혁 본부장 DM',
-    actions: [
-      { icon:'📋', label:'주간 개발 진행상황 보고 요청', fn: () => showToast('이종혁 본부장에게 DM 발송 완료!') },
-      { icon:'🔧', label:'HI-PPE v4.0 현황 업데이트 요청', fn: () => showToast('발송 완료!') },
-      { icon:'📅', label:'이번 주 미팅 일정 확인', fn: () => showToast('발송 완료!') },
-    ]
-  },
-  'dm-bongseok': {
-    title: '김봉석 소장 DM',
-    actions: [
-      { icon:'📋', label:'연구소 주간 현황 보고 요청', fn: () => showToast('김봉석 소장에게 DM 발송 완료!') },
-      { icon:'🔬', label:'IMU 센서 선정 결과 보고 요청', fn: () => showToast('발송 완료!') },
-    ]
-  },
-  'dm-chanyoung': {
-    title: '김찬영 연구원 DM',
-    actions: [
-      { icon:'📊', label:'GNSS 기준국 현황 데이터 정리 요청', fn: () => showToast('김찬영 연구원에게 DM 발송 완료!') },
-      { icon:'📁', label:'측위 정확도 테스트 결과 공유 요청', fn: () => showToast('발송 완료!') },
-    ]
-  }
-};
-
 function openModal(key) {
-  const m = modals[key];
+  const m = {
+    'slack-dm': {
+      title: 'Slack DM 보내기',
+      actions: [
+        {icon:'👤', label:'이종혁 본부장 — 개발현황 보고 요청', cmd:'이종혁 본부장에게 보낼 Slack DM 작성: 이번 주 HI-PPE v4.0 개발 진행상황 업데이트 요청'},
+        {icon:'👤', label:'김봉석 소장 — 연구 현황 보고', cmd:'김봉석 소장에게 보낼 Slack DM 작성: IMU 센서 선정 및 연구소 현황 보고 요청'},
+        {icon:'👤', label:'김찬영 연구원 — 데이터 정리', cmd:'김찬영 연구원에게 보낼 Slack DM 작성: GNSS 기준국 현황 데이터 정리 요청'},
+        {icon:'🏢', label:'경영본부 — 자금현황 보고', cmd:'경영본부에 보낼 메시지 작성: 이번 주 자금 집행 현황 보고 요청'},
+      ]
+    }
+  }[key];
   if (!m) return;
   document.getElementById('modal-title').textContent = m.title;
-  const actions = document.getElementById('modal-actions');
-  actions.innerHTML = m.actions.map((a,i) =>
-    `<button class="modal-btn" onclick="modalAction(${i},'${key}')">${a.icon} ${a.label}</button>`
-  ).join('') + `<button class="modal-btn modal-cancel" onclick="closeModal()">취소</button>`;
+  document.getElementById('modal-actions').innerHTML =
+    m.actions.map(a =>
+      `<button class="modal-btn" onclick="closeModal();setTimeout(()=>sendQuickCmd(\`${a.cmd}\`),200)">${a.icon} ${a.label}</button>`
+    ).join('') +
+    `<button class="modal-btn modal-cancel" onclick="closeModal()">취소</button>`;
   document.getElementById('modal').classList.add('open');
 }
-function modalAction(i, key) {
-  closeModal();
-  setTimeout(() => modals[key].actions[i].fn(), 150);
-}
+
 function closeModal(e) {
   if (!e || e.target === document.getElementById('modal'))
     document.getElementById('modal').classList.remove('open');
 }
 
 // 토스트
-let toastTimer;
+let tt;
 function showToast(msg) {
   const t = document.getElementById('toast');
   t.textContent = msg;
   t.classList.add('show');
-  clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => t.classList.remove('show'), 2500);
+  clearTimeout(tt);
+  tt = setTimeout(() => t.classList.remove('show'), 2500);
 }
 
-// AI 입력
-function sendAI() {
-  const input = document.getElementById('ai-input');
-  if (!input.value.trim()) return;
-  showToast('AI 처리 중: ' + input.value.substring(0, 20) + '...');
-  input.value = '';
-}
-document.getElementById('ai-input').addEventListener('keydown', e => {
-  if (e.key === 'Enter') sendAI();
-});
-
-// PWA 설치 프롬프트
-let deferredPrompt;
-window.addEventListener('beforeinstallprompt', e => {
-  e.preventDefault();
-  deferredPrompt = e;
+// 엔터키
+document.getElementById('chat-input').addEventListener('keydown', e => {
+  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
 });
 </script>
 </body>
