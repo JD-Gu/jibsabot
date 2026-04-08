@@ -58,15 +58,17 @@ function verifySlackRequest(req, rawBody, signingSecret) {
   return `v0=${hmac}` === signature;
 }
 
-async function fetchWithRetry(url, options, maxRetries = 4) {
-  const delays = [1000, 2000, 4000, 8000];
+// [Vercel 타임아웃 최적화] 재시도 간격 조정
+async function fetchWithRetry(url, options, maxRetries = 3) {
+  const delays = [800, 2000, 5000]; // 재시도 간격 단축
   for (let i = 0; i <= maxRetries; i++) {
     const controller = new AbortController();
-    const id = setTimeout(() => controller.abort(), 15000); 
+    const id = setTimeout(() => controller.abort(), 12000); // 각 호출 12초 제한
     try {
       const response = await fetch(url, { ...options, signal: controller.signal });
       clearTimeout(id);
       if ((response.status === 429 || response.status >= 500) && i < maxRetries) {
+        console.log(`[할당량 초과 재시도 ${i+1}/${maxRetries}] ${delays[i]}ms 대기 후 다시 시도...`);
         await new Promise(resolve => setTimeout(resolve, delays[i]));
         continue;
       }
@@ -92,7 +94,9 @@ async function slackApi(endpoint, body, token) {
     options.body = JSON.stringify(body);
   }
   const r = await fetchWithRetry(url, options);
-  return await r.json();
+  const res = await r.json();
+  if (!res.ok) console.error(`[Slack API 에러] ${endpoint}: ${res.error}`);
+  return res;
 }
 
 async function findUserIdByName(name, token) {
@@ -108,7 +112,7 @@ async function findUserIdByName(name, token) {
 
 async function handleBoss(text, channel, env) {
   console.log(`[대표님 지시 수신] ${text}`);
-  const systemPrompt = `당신은 에이치앤아이(H&I) 구자덕 대표님의 유능한 비서 '구대표집사봇'입니다. 싹싹하게 보고하세요.`;
+  const systemPrompt = `당신은 에이치앤아이(H&I) 구자덕 대표님의 유능한 비서 '구대표집사봇'입니다. 싹싹하고 간결하게 보고하세요.`;
   const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${env.GEMINI_KEY}`;
 
   try {
@@ -122,17 +126,26 @@ async function handleBoss(text, channel, env) {
       })
     });
     const data = await response.json();
+    
+    if (data.error && data.error.code === 429) {
+      return await slackApi('chat.postMessage', { channel, text: "⏳ 구글 엔진 할당량이 초과되어 답변이 늦어지고 있습니다. 잠시 후 다시 말씀해 주세요." }, env.BOT_TOKEN);
+    }
+
     const parts = data.candidates?.[0]?.content?.parts || [];
 
     for (const part of parts) {
-      if (part.text) await slackApi('chat.postMessage', { channel, text: part.text }, env.BOT_TOKEN);
+      // 💡 [v11.0 추가] 모든 텍스트 답변을 로그에 기록
+      if (part.text) {
+        console.log(`[텍스트 답변 확정] ${part.text}`);
+        await slackApi('chat.postMessage', { channel, text: part.text }, env.BOT_TOKEN);
+      }
       
       if (part.functionCall) {
         const { name, args } = part.functionCall;
         if (name === 'send_message') {
           let targetId = HNI.members[args.name]?.id || await findUserIdByName(args.name, env.BOT_TOKEN);
           if (targetId) {
-            console.log(`[최종 발송 확정] 대상: ${args.name}(ID:${targetId}), 메시지: ${args.message}`);
+            console.log(`[메시지 발송 확정] 대상: ${args.name}, 내용: ${args.message}`);
             await slackApi('chat.postMessage', { channel: targetId, text: args.message }, env.BOT_TOKEN);
             await slackApi('chat.postMessage', { channel, text: `✅ 대표님, ${args.name}님께 메시지를 전송했습니다.` }, env.BOT_TOKEN);
           } else {
@@ -153,23 +166,26 @@ async function handleBoss(text, channel, env) {
             });
             const sData = await summaryRes.json();
             const sReply = sData.candidates?.[0]?.content?.parts?.[0]?.text;
-            if (sReply) await slackApi('chat.postMessage', { channel, text: sReply }, env.BOT_TOKEN);
+            if (sReply) {
+              console.log(`[재무 보고 확정] ${sReply.slice(0, 50)}...`);
+              await slackApi('chat.postMessage', { channel, text: sReply }, env.BOT_TOKEN);
+            }
           }
         }
       }
     }
-  } catch (e) { console.error('[에러]', e); }
+  } catch (e) { 
+    console.error('[에러]', e); 
+    await slackApi('chat.postMessage', { channel, text: `⚠️ 구대표집사봇 지연 발생: ${e.message}` }, env.BOT_TOKEN);
+  }
 }
 
-// ─── [4] handleMember: 직원용 (답변 수신 및 대표님 보고) ──────────
+// ─── [4] handleMember: 직원용 ──────────────────────────────────
 
 async function handleMember(senderId, text, channel, env) {
   const userRes = await slackApi('users.info', { user: senderId }, env.BOT_TOKEN);
   const name = userRes.user?.profile?.real_name || "직원";
-  const systemPrompt = `당신은 주식회사 에이치앤아이(H&I)의 친절한 AI 비서 '구대표집사봇'입니다. 
-  직원의 질문에 기술적으로 답변하거나 고민을 들어주세요. 
-  기술 키워드: ${HNI.knowledge.tech}`;
-  
+  const systemPrompt = `당신은 에이치앤아이(H&I)의 친절한 AI 집사 '구대표집사봇'입니다. 기술 질문(${HNI.knowledge.tech})에 답변하세요.`;
   const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${env.GEMINI_KEY}`;
 
   try {
@@ -180,15 +196,9 @@ async function handleMember(senderId, text, channel, env) {
     });
     const data = await response.json();
     const reply = data.candidates?.[0]?.content?.parts?.[0]?.text;
-    
-    // 1. 직원에게 집사봇의 답변 전송
     if (reply) await slackApi('chat.postMessage', { channel, text: reply }, env.BOT_TOKEN);
-    
-    // 2. [핵심] 직원이 한 말을 대표님께 알림 (보고 기능)
-    // 5자 이상의 유의미한 메시지인 경우에만 보고하여 불필요한 알림 최소화
     if (text.length >= 2) {
-      const reportMsg = `🔔 *[직원 응답 보고]*\n발신자: ${name}\n내용: ${text}\n---`;
-      await slackApi('chat.postMessage', { channel: env.BOSS_ID, text: reportMsg }, env.BOT_TOKEN);
+      await slackApi('chat.postMessage', { channel: env.BOSS_ID, text: `🔔 *[직원 응답 보고]*\n발신자: ${name}\n내용: ${text}` }, env.BOT_TOKEN);
     }
   } catch (e) { console.error(e); }
 }
@@ -201,13 +211,17 @@ export default async function handler(req, res) {
   for await (const chunk of req) chunks.push(chunk);
   const rawBody = Buffer.concat(chunks).toString('utf8');
   const env = { BOT_TOKEN: process.env.SLACK_BOT_TOKEN, BOSS_ID: process.env.BOSS_USER_ID, GEMINI_KEY: process.env.GEMINI_API_KEY, SIGNING_SECRET: process.env.SLACK_SIGNING_SECRET };
+  
   if (!verifySlackRequest(req, rawBody, env.SIGNING_SECRET)) return res.status(401).end();
   if (req.headers['x-slack-retry-num']) return res.status(200).send('ok');
+  
   let body;
   try { body = JSON.parse(rawBody); } catch { return res.status(200).end(); }
   if (body.type === 'url_verification') return res.status(200).json({ challenge: body.challenge });
+  
   const event = body.event;
   if (!event || event.bot_id || !event.text) return res.status(200).end();
+  
   if (event.user === env.BOSS_ID) {
     await handleBoss(event.text.trim(), event.channel, env);
   } else {
