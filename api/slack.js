@@ -1,14 +1,10 @@
 export default async function handler(req, res) {
-
-  // POST만 허용
   if (req.method !== 'POST') return res.status(405).end();
 
-  // body 읽기
   const chunks = [];
   for await (const chunk of req) chunks.push(chunk);
   const rawBody = Buffer.concat(chunks).toString('utf8');
 
-  // body 파싱
   let body;
   try {
     body = JSON.parse(rawBody);
@@ -21,66 +17,41 @@ export default async function handler(req, res) {
     return res.status(200).json({ challenge: body.challenge });
   }
 
-  // 이벤트 꺼내기
   const event = body.event;
-
-  // 이벤트 없으면 종료
   if (!event) return res.status(200).end();
 
-  // 봇 메시지 무시
+  // 봇 자신의 메시지 무시 (무한루프 방지)
+  if (event.bot_id) return res.status(200).end();
   if (event.subtype === 'bot_message') return res.status(200).end();
-
-  // 텍스트 없으면 종료
+  if (!event.user) return res.status(200).end();
   if (!event.text) return res.status(200).end();
 
   const senderId = event.user;
   const text     = event.text.trim();
   const channel  = event.channel;
 
-  const BOT_TOKEN   = process.env.SLACK_BOT_TOKEN;
-  const BOSS_ID     = process.env.BOSS_USER_ID;
-  const CLAUDE_KEY  = process.env.ANTHROPIC_API_KEY;
+  const BOT_TOKEN  = process.env.SLACK_BOT_TOKEN;
+  const BOSS_ID    = process.env.BOSS_USER_ID;
+  const CLAUDE_KEY = process.env.ANTHROPIC_API_KEY;
 
-  // 대표님이 보낸 메시지면 AI와 직접 대화
-  if (senderId === BOSS_ID) {
-    try {
-      const r = await fetch('https://api.anthropic.com/v1/messages', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-api-key': CLAUDE_KEY,
-          'anthropic-version': '2023-06-01'
-        },
-        body: JSON.stringify({
-          model: 'claude-sonnet-4-20250514',
-          max_tokens: 1024,
-          system: '당신은 구자덕 대표(H&I 에이치앤아이)의 AI 집사봇입니다. 한국어로 간결하게 답하세요.',
-          messages: [{ role: 'user', content: text }]
-        })
-      });
-      const d = await r.json();
-      const reply = d.content?.[0]?.text || '처리 중 오류가 발생했습니다.';
-      await fetch('https://slack.com/api/chat.postMessage', {
-        method: 'POST',
-        headers: { 'Authorization': `Bearer ${BOT_TOKEN}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ channel, text: reply })
-      });
-    } catch(e) {
-      console.error('boss chat error:', e.message);
-    }
-    return res.status(200).end();
+  // Slack 메시지 발송 헬퍼
+  async function slack(ch, txt, blocks) {
+    const b = blocks ? { channel: ch, text: txt, blocks } : { channel: ch, text: txt };
+    const r = await fetch('https://slack.com/api/chat.postMessage', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${BOT_TOKEN}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(b)
+    });
+    const d = await r.json();
+    if (!d.ok) console.error('slack error:', d.error);
+    return d;
   }
 
-  // 직원 메시지 처리
-  try {
-    // 발신자 이름 조회
-    const ur = await fetch(`https://slack.com/api/users.info?user=${senderId}`, {
-      headers: { 'Authorization': `Bearer ${BOT_TOKEN}` }
-    });
-    const ud = await ur.json();
-    const name = ud.user?.profile?.real_name || ud.user?.name || senderId;
-
-    // Claude AI 분석
+  // Claude API 호출 헬퍼
+  async function claude(system, userMsg) {
     const r = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: {
@@ -90,60 +61,121 @@ export default async function handler(req, res) {
       },
       body: JSON.stringify({
         model: 'claude-sonnet-4-20250514',
-        max_tokens: 512,
-        system: `당신은 구자덕 대표(H&I)의 AI 집사봇입니다.
-직원 메시지를 분석해서 순수 JSON만 출력하세요.
-{"importance":"high|medium|low","summary":"한줄요약","report":"대표님보고내용","draft":"답변초안"}
-importance: high(결재/계약/인사), medium(업무보고), low(단순문의)`,
-        messages: [{ role: 'user', content: `발신자: ${name}\n내용: ${text}` }]
+        max_tokens: 1024,
+        system,
+        messages: [{ role: 'user', content: userMsg }]
       })
     });
     const d = await r.json();
-    let analysis;
+    return d.content?.[0]?.text || '';
+  }
+
+  // ── 대표님이 직접 대화하는 경우 ──
+  if (senderId === BOSS_ID) {
     try {
-      analysis = JSON.parse(d.content?.[0]?.text?.trim() || '{}');
+      const reply = await claude(
+        `당신은 구자덕 대표(H&I 에이치앤아이)의 AI 집사봇입니다.
+회사: GNSS/RTK 초정밀 측위 전문기업, LG유플러스 파트너
+주요 인물: 이종혁(제품본부장), 김봉석(기술연구소장), 김인구(서비스지원팀장)
+친절하고 간결하게 한국어로 답하세요.`,
+        text
+      );
+      await slack(channel, reply);
+    } catch(e) {
+      console.error('boss error:', e.message);
+      await slack(channel, `오류가 발생했습니다: ${e.message}`);
+    }
+    return res.status(200).end();
+  }
+
+  // ── 직원 메시지 처리 ──
+  try {
+    // 발신자 이름 조회
+    const ur = await fetch(`https://slack.com/api/users.info?user=${senderId}`, {
+      headers: { 'Authorization': `Bearer ${BOT_TOKEN}` }
+    });
+    const ud   = await ur.json();
+    const name = ud.user?.profile?.real_name || ud.user?.name || senderId;
+
+    // Claude AI 분석
+    const raw = await claude(
+      `당신은 구자덕 대표(H&I)의 AI 집사봇입니다.
+직원 메시지를 분석해서 아래 형식의 JSON만 출력하세요. 다른 텍스트 없이.
+{"importance":"medium","summary":"한줄요약","report":"대표님께보고할내용","draft":"답변초안"}
+importance: high(결재/계약/인사/예산), medium(업무보고/이슈), low(단순문의/완료보고)`,
+      `발신자: ${name}\n내용: ${text}`
+    );
+
+    // JSON 안전 추출
+    let a = {};
+    try {
+      const match = raw.match(/\{[\s\S]*\}/);
+      a = JSON.parse(match ? match[0] : '{}');
     } catch {
-      analysis = { importance: 'medium', summary: '메시지 수신', report: `${name}: ${text}`, draft: '확인 후 답변 드리겠습니다.' };
+      a = {};
     }
 
-    const emoji = { high: '🔴', medium: '🟡', low: '🟢' }[analysis.importance] || '⚪';
+    const importance = a.importance || 'medium';
+    const summary    = a.summary    || '메시지 수신';
+    const report     = a.report     || `${name}: ${text}`;
+    const draft      = a.draft      || '확인 후 답변 드리겠습니다.';
+    const emoji      = { high: '🔴', medium: '🟡', low: '🟢' }[importance] || '⚪';
 
     // 대표님께 보고 (승인 버튼 포함)
-    await fetch('https://slack.com/api/chat.postMessage', {
-      method: 'POST',
-      headers: { 'Authorization': `Bearer ${BOT_TOKEN}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        channel: BOSS_ID,
-        text: `${emoji} [집사봇] ${name}: ${analysis.summary}`,
-        blocks: [
-          { type: 'header', text: { type: 'plain_text', text: `${emoji} ${analysis.summary}`, emoji: true } },
-          { type: 'section', fields: [
-            { type: 'mrkdwn', text: `*발신자*\n${name}` },
-            { type: 'mrkdwn', text: `*중요도*\n${emoji} ${analysis.importance}` }
-          ]},
-          { type: 'section', text: { type: 'mrkdwn', text: `*원본*\n> ${text}` } },
-          { type: 'section', text: { type: 'mrkdwn', text: `*AI 요약*\n${analysis.report}` } },
-          { type: 'divider' },
-          { type: 'section', text: { type: 'mrkdwn', text: `*AI 초안 답변*\n${analysis.draft}` } },
-          { type: 'actions', elements: [
-            { type: 'button', style: 'primary', action_id: 'approve',
-              text: { type: 'plain_text', text: '✅ 초안으로 발송', emoji: true },
-              value: JSON.stringify({ action: 'approve', channel, reply: analysis.draft }) },
-            { type: 'button', action_id: 'ignore', style: 'danger',
-              text: { type: 'plain_text', text: '🚫 무시', emoji: true },
-              value: JSON.stringify({ action: 'ignore' }) }
-          ]}
+    await slack(BOSS_ID, `${emoji} [집사봇] ${name}: ${summary}`, [
+      {
+        type: 'header',
+        text: { type: 'plain_text', text: `${emoji} ${summary}`, emoji: true }
+      },
+      {
+        type: 'section',
+        fields: [
+          { type: 'mrkdwn', text: `*발신자*\n${name}` },
+          { type: 'mrkdwn', text: `*중요도*\n${emoji} ${importance}` }
         ]
-      })
-    });
+      },
+      {
+        type: 'section',
+        text: { type: 'mrkdwn', text: `*원본 메시지*\n> ${text}` }
+      },
+      {
+        type: 'section',
+        text: { type: 'mrkdwn', text: `*AI 요약*\n${report}` }
+      },
+      { type: 'divider' },
+      {
+        type: 'section',
+        text: { type: 'mrkdwn', text: `*AI 초안 답변*\n${draft}` }
+      },
+      {
+        type: 'actions',
+        elements: [
+          {
+            type: 'button', style: 'primary', action_id: 'approve',
+            text: { type: 'plain_text', text: '✅ 초안으로 발송', emoji: true },
+            value: JSON.stringify({ action: 'approve', channel, reply: draft })
+          },
+          {
+            type: 'button', style: 'danger', action_id: 'ignore',
+            text: { type: 'plain_text', text: '🚫 무시', emoji: true },
+            value: JSON.stringify({ action: 'ignore' })
+          }
+        ]
+      }
+    ]);
 
   } catch(e) {
-    console.error('worker handler error:', e.message);
-    // 오류 시 원문 그대로 대표님께 전달
+    console.error('worker error:', e.message);
     await fetch('https://slack.com/api/chat.postMessage', {
       method: 'POST',
-      headers: { 'Authorization': `Bearer ${BOT_TOKEN}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ channel: BOSS_ID, text: `⚠️ 처리 오류\n발신자: ${senderId}\n내용: ${text}\n오류: ${e.message}` })
+      headers: {
+        'Authorization': `Bearer ${BOT_TOKEN}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        channel: BOSS_ID,
+        text: `⚠️ 오류\n발신자: ${senderId}\n내용: ${text}\n오류: ${e.message}`
+      })
     });
   }
 
