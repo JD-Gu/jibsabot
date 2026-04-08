@@ -15,7 +15,8 @@ const HNI = {
     '이창현': { id: 'U04DX8YR8SC', email: 'lch9772@hni-gl.com', dept: '디바이스', role: '프로' },
     '정명휘': { id: 'U02MMQ40LE6', email: '31jmh@hni-gl.com', dept: '플랫폼', role: '프로' },
     '정현수': { id: 'U02N0D92YE5', email: '25jhs@hni-gl.com', dept: '플랫폼', role: '팀장' },
-    '지우현': { id: 'U02MJRGEP7F', email: '90jay@hni-gl.com', dept: '플랫폼', role: '프로' }
+    '지우현': { id: 'U02MJRGEP7F', email: '90jay@hni-gl.com', dept: '플랫폼', role: '프로' },
+    '이종혁': { id: 'U02M86NGGM7', email: '99hyeoki@hni-gl.com', dept: '제품본부', role: '본부장' }
   },
   knowledge: {
     companyName: "주식회사 에이치앤아이 (H&I)",
@@ -136,21 +137,19 @@ async function getChatContext(channel, token, limit = 8) {
     }));
 }
 
-// ─── [3] handleBoss: 대표님용 (구글 캘린더 파싱 지능화) ───────────────
+// ─── [3] handleBoss: 대표님용 (스레드 지원 추가) ───────────────────────
 
-async function handleBoss(text, channel, env) {
+async function handleBoss(text, channel, threadTs, env) {
   const nowKST = new Date().toLocaleString('ko-KR', { timeZone: 'Asia/Seoul' });
-  console.log(`[대표님 지시 수신] ${text} | 기준시각: ${nowKST}`);
+  console.log(`[대표님 지시] ${text} | threadTs: ${threadTs}`);
   
   const systemPrompt = `당신은 에이치앤아이(H&I) 구대표님의 전담 비서 '구대표집사봇'입니다.
   현재 시각: ${nowKST}
   
-  [구글 캘린더 데이터 해석 지침]
-  1. 구글 캘린더 메시지는 'Event updated!', '15 minutes until...', 'Event cancelled.' 등 중복 알림이 많습니다.
-  2. 반드시 'When:' 필드에 적힌 날짜와 시간을 기준으로 판단하세요.
-  3. 'Event updated!' 메시지의 경우, 여러 개의 'When:'이 있으면 가장 아래(최신) 정보를 유효한 것으로 간주하세요.
-  4. '내일' 일정을 물으면 ${nowKST} 기준 다음 날짜의 모든 일정을 찾아 리스트로 보고하세요.
-  5. 정보가 누락되지 않도록 꼼꼼히 훑으세요.`;
+  [지침]
+  1. 대표님의 질문에 상세하고 명확하게 답변하세요.
+  2. 경영 현황(재무/영업/일정) 질문 시 적절한 도구를 사용하세요.
+  3. 당신은 채널에서 멘션(@)될 수도 있습니다. 자연스럽게 대화에 참여하세요.`;
 
   const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${env.GEMINI_KEY}`;
 
@@ -168,13 +167,13 @@ async function handleBoss(text, channel, env) {
     
     const data = await response.json();
     if (data.error && data.error.code === 429) {
-      return await slackApi('chat.postMessage', { channel, text: "⏳ 현재 엔진 할당량이 소진되었습니다. 잠시 후 시도해 주세요." }, env.BOT_TOKEN);
+      return await slackApi('chat.postMessage', { channel, text: "⏳ 할당량 초과로 잠시 후 시도해 주세요.", thread_ts: threadTs }, env.BOT_TOKEN);
     }
 
     const parts = data.candidates?.[0]?.content?.parts || [];
 
     for (const part of parts) {
-      if (part.text) await slackApi('chat.postMessage', { channel, text: part.text }, env.BOT_TOKEN);
+      if (part.text) await slackApi('chat.postMessage', { channel, text: part.text, thread_ts: threadTs }, env.BOT_TOKEN);
       
       if (part.functionCall) {
         const { name, args } = part.functionCall;
@@ -183,7 +182,7 @@ async function handleBoss(text, channel, env) {
           let targetId = HNI.members[args.name]?.id || await findUserIdByName(args.name, env.BOT_TOKEN);
           if (targetId) {
             await slackApi('chat.postMessage', { channel: targetId, text: args.message }, env.BOT_TOKEN);
-            await slackApi('chat.postMessage', { channel, text: `✅ 대표님, ${args.name}님께 다음 내용을 전달했습니다:\n> ${args.message}` }, env.BOT_TOKEN);
+            await slackApi('chat.postMessage', { channel, text: `✅ 대표님, ${args.name}님께 메시지를 전달했습니다:\n> ${args.message}`, thread_ts: threadTs }, env.BOT_TOKEN);
           }
         }
         
@@ -211,29 +210,31 @@ async function handleBoss(text, channel, env) {
               body: JSON.stringify({
                 contents: [
                   { role: 'user', parts: [{ text: `기준 시각: ${nowKST}\n대표님 지시: ${text}\n\n[채널 데이터]\n${context}` }] },
-                  { role: 'user', parts: [{ text: `위 데이터에서 대표님이 요청하신 날짜의 일정만 골라내어 명확하게 보고하세요. 취소된 일정은 제외하고, 업데이트된 일정은 최종 시간을 반영하세요.` }] }
+                  { role: 'user', parts: [{ text: `위 데이터를 분석하여 대표님이 요청하신 정보를 보고하세요.` }] }
                 ]
               })
             });
             const sData = await summaryRes.json();
             const sReply = sData.candidates?.[0]?.content?.parts?.[0]?.text;
-            if (sReply) await slackApi('chat.postMessage', { channel, text: sReply }, env.BOT_TOKEN);
+            if (sReply) await slackApi('chat.postMessage', { channel, text: sReply, thread_ts: threadTs }, env.BOT_TOKEN);
           }
         }
       }
     }
   } catch (e) {
-    console.error('[에러]', e);
-    await slackApi('chat.postMessage', { channel, text: `⚠️ 응답 중 지연이 발생했습니다. 다시 지시해 주세요.` }, env.BOT_TOKEN);
+    console.error('[BOSS 에러]', e);
+    await slackApi('chat.postMessage', { channel, text: `⚠️ 응답 지연 발생.`, thread_ts: threadTs }, env.BOT_TOKEN);
   }
 }
 
-// ─── [4] handleMember: 직원용 ──────────────────────────────────
+// ─── [4] handleMember: 직원용 (스레드 지원 추가) ──────────────────────
 
-async function handleMember(senderId, text, channel, env) {
+async function handleMember(senderId, text, channel, threadTs, env) {
   const userRes = await slackApi('users.info', { user: senderId }, env.BOT_TOKEN);
   const name = userRes.user?.profile?.real_name || "직원";
-  const systemPrompt = `당신은 에이치앤아이(H&I) AI 집사입니다. 친절히 대화하고 마지막에 [REPORT_STRENGTH: LOW/HIGH]를 붙이세요.`;
+  const systemPrompt = `당신은 H&I AI 집사입니다. 
+  1. 임직원들과 친절하고 재치 있게 대화하세요.
+  2. 질문에 답한 뒤 마지막에 [REPORT_STRENGTH: LOW/HIGH]를 붙이세요.`;
   const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${env.GEMINI_KEY}`;
 
   try {
@@ -247,14 +248,18 @@ async function handleMember(senderId, text, channel, env) {
     let reply = data.candidates?.[0]?.content?.parts?.[0]?.text || "";
     const isHigh = reply.includes('REPORT_STRENGTH: HIGH');
     reply = reply.replace(/\[REPORT_STRENGTH: (LOW|HIGH)\]/g, "").trim();
-    if (reply) await slackApi('chat.postMessage', { channel, text: reply }, env.BOT_TOKEN);
+    
+    // 직원에게 스레드 답장 전송
+    if (reply) await slackApi('chat.postMessage', { channel, text: reply, thread_ts: threadTs }, env.BOT_TOKEN);
+    
+    // 중요 내용일 경우 대표님께 보고 (대표님 DM)
     if (isHigh) {
       await slackApi('chat.postMessage', { channel: env.BOSS_ID, text: `🔔 *[중요 직원 대화 보고]*\n발신자: ${name}\n내용: ${text}` }, env.BOT_TOKEN);
     }
-  } catch (e) { console.error('[직원 응대 에러]', e); }
+  } catch (e) { console.error('[MEMBER 에러]', e); }
 }
 
-// ─── [5] 메인 핸들러 ──────────────────────────────────────
+// ─── [5] 메인 핸들러 (이벤트 분석 및 멘션 정제) ──────────────────────
 
 export default async function handler(req, res) {
   try {
@@ -278,20 +283,25 @@ export default async function handler(req, res) {
     if (body.type === 'url_verification') return res.status(200).json({ challenge: body.challenge });
     
     const event = body.event;
+    // 봇의 메시지이거나 텍스트가 없으면 종료
     if (!event || event.bot_id || !event.text) return res.status(200).end();
     
+    // 💡 [v12.8 핵심] 멘션 태그(<@U...>) 제거 및 스레드 ID 확보
+    const cleanText = event.text.replace(/<@U[A-Z0-9]+>/g, '').trim();
+    const threadTs = event.thread_ts || event.ts; // 스레드 내 대화면 thread_ts, 아니면 본체 ts 사용
+    
     if (event.user === env.BOSS_ID) {
-      await handleBoss(event.text.trim(), event.channel, env);
+      await handleBoss(cleanText, event.channel, threadTs, env);
     } else {
-      await handleMember(event.user, event.text.trim(), event.channel, env);
+      await handleMember(event.user, cleanText, event.channel, threadTs, env);
     }
     
     return res.status(200).send('ok');
   } catch (globalError) {
-    console.error('[CRITICAL RUNTIME ERROR]', globalError);
+    console.error('[CRITICAL ERROR]', globalError);
     return res.status(200).send('error handled');
   }
 }
 
 export const config = { api: { bodyParser: false } };
-console.log("[H&I Slack Bot] Script Loaded Successfully");
+console.log("[H&I Slack Bot] v12.8 Context & Thread Aware Loaded");
