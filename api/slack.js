@@ -1,6 +1,6 @@
 import crypto from 'crypto';
 
-// ─── [1] 데이터 및 지식 베이스 ──────────────────────────────────
+// ─── [1] 데이터 및 지식 베이스 (집사봇의 학습 데이터 - 대폭 보강) ──────────
 const HNI = {
   members: {
     '이종혁': { id: 'U02M86NGGM7', dept: '제품본부', role: '본부장' },
@@ -12,9 +12,25 @@ const HNI = {
     '정현수': { id: null, dept: '플랫폼팀', role: '팀장' },
   },
   knowledge: {
-    tech: "GNSS/RTK 초정밀 측위(cm급), HI-PPE 임베디드 제어, AI라이브 플랫폼, AI 엣지 비전 기술",
-    business: "LG유플러스 독점 파트너, 전국 200개 GNSS 기준국 운영, 자율주행 및 드론 정밀 항법 지원",
-    vision: "국내 1위 초정밀 측위 플랫폼 기업 (H&I)",
+    companyName: "주식회사 에이치앤아이 (H&I)",
+    ceo: "구자덕 대표이사 (공간정보 분야 30년 베테랑)",
+    vision: "초정밀 위치 정보를 기반으로 모든 이동의 안전과 지능화를 선도하는 '국내 1위 초정밀 측위 플랫폼 기업'",
+    coreStrengths: [
+      "전국 200여 개의 GNSS 상시관측소(기준국) 인프라 운영",
+      "LG유플러스와의 독점적 파트너십을 통한 전국망 RTK 서비스 제공",
+      "공간정보 전문 역량 기반의 실시간 위치 보정 기술력 보유"
+    ],
+    technicalDetails: {
+      gnss_rtk: "Network-RTK 기반 cm급 초정밀 측위 기술. 자율주행, 드론 정밀 항법, 시설물 변위 모니터링에 활용.",
+      hi_ppe: "HI-PPE. 임베디드 제어 기술과 AI 엣지를 결합한 지능형 정밀측위솔루션.",
+      ai_live: "AI라이브 플랫폼. 실시간 위치 데이터와 AI 비전을 결합하여 현장의 상황을 디지털 트윈으로 구현하는 실시간 맵핑 기술.",
+      vision_ai: "AI 엣지 비전을 활용한 객체 인식 및 안전 위험 요소 실시간 감지 기술."
+    },
+    businessDomains: {
+      smart_construction: "건설 현장 안전 관리 플랫폼 및 지능형 PPE 보급",
+      telematics: "차량 및 이동체의 실시간 정밀 위치 관제 솔루션",
+      autonomous: "자율주행 로봇 및 드론을 위한 항법 보정 데이터 서비스"
+    },
     management_channels: {
       finance: { name: "cmm-cxo", id: "C02M8BMJZG9" }, 
       sales: { name: "cmm-영업지원", id: "C06DRAHHAQZ" }
@@ -105,42 +121,42 @@ async function findUserIdByName(name, token) {
   return found ? found.id : null;
 }
 
-// ─── [3] 맥락 유지를 위한 히스토리 추출기 ───────────────────────────
-
 async function getChatContext(channel, token, limit = 8) {
   const res = await slackApi('conversations.history', { channel, limit }, token);
   if (!res.ok) return [];
-  
-  // 슬랙은 최신순으로 주므로, Gemini를 위해 시간순(reverse)으로 정렬
-  // 메시지 중 텍스트가 있고, 봇 자신의 메시지(model)와 사용자의 메시지(user)를 구분
   return res.messages
     .reverse()
-    .filter(m => m.text && !m.text.includes('할당량이 소진되었습니다')) // 에러 메시지 제외
+    .filter(m => m.text && !m.text.includes('할당량이 소진되었습니다'))
     .map(m => ({
       role: m.bot_id ? "model" : "user",
       parts: [{ text: m.text }]
     }));
 }
 
-// ─── [4] handleBoss: 대표님용 (맥락 유지 강화) ────────────────────
+// ─── [3] handleBoss: 대표님용 (강화된 지식 활용) ────────────────────
 
 async function handleBoss(text, channel, env) {
-  console.log(`[대표님 지시 수신] ${text}`);
-  const systemPrompt = `당신은 에이치앤아이(H&I) 구대표님의 전담 비서 '구대표집사봇'입니다. 
-  1. 이전 대화 내용을 참고하여 맥락에 맞게 답변하세요.
-  2. 싹싹하고 명확하게 보고하세요.`;
+  const systemPrompt = `당신은 ${HNI.knowledge.companyName} 구자덕 대표님의 전담 AI 비서 '구대표집사봇'입니다.
+  [회사 전문 지식]
+  - 비전: ${HNI.knowledge.vision}
+  - 핵심 강점: ${HNI.knowledge.coreStrengths.join(', ')}
+  - 기술 디테일: ${JSON.stringify(HNI.knowledge.technicalDetails)}
+  - 사업 영역: ${JSON.stringify(HNI.knowledge.businessDomains)}
+  
+  [지침]
+  - 대표님의 전문적인 배경(30년 경력)을 존중하여 논리적이고 객관적인 정보를 제공하세요.
+  - 사내 기술 질문 시 위 지식 베이스를 바탕으로 답변하세요.
+  - 재무/영업 조회가 필요하면 report_management_status 도구를 사용하세요.`;
 
   const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${env.GEMINI_KEY}`;
 
   try {
-    // 💡 [v11.7] 대화 맥락 가져오기
     const history = await getChatContext(channel, env.BOT_TOKEN);
-    
     const response = await fetchWithRetry(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        contents: history, // 전체 대화 내역 전달
+        contents: history,
         system_instruction: { parts: [{ text: systemPrompt }] },
         tools: GEMINI_TOOLS
       })
@@ -148,7 +164,7 @@ async function handleBoss(text, channel, env) {
     
     const data = await response.json();
     if (data.error && data.error.code === 429) {
-      return await slackApi('chat.postMessage', { channel, text: "⏳ 구대표님, 엔진 사용량이 많아 1분 후 다시 시도해 주세요." }, env.BOT_TOKEN);
+      return await slackApi('chat.postMessage', { channel, text: "⏳ 구대표님, 엔진 부하로 인해 약 1분 후 답변이 가능합니다." }, env.BOT_TOKEN);
     }
 
     const parts = data.candidates?.[0]?.content?.parts || [];
@@ -177,7 +193,7 @@ async function handleBoss(text, channel, env) {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({
-                contents: [{ role: 'user', parts: [{ text: text }] }, { role: 'model', parts: [part] }, { role: 'user', parts: [{ text: `채널(#${targetChannel.name})의 최근 이력입니다:\n${context}\n요약 보고하세요.` }] }]
+                contents: [{ role: 'user', parts: [{ text: text }] }, { role: 'model', parts: [part] }, { role: 'user', parts: [{ text: `채널(#${targetChannel.name}) 내용:\n${context}\n분석 보고하세요.` }] }]
               })
             });
             const sData = await summaryRes.json();
@@ -189,16 +205,21 @@ async function handleBoss(text, channel, env) {
     }
   } catch (e) {
     console.error('[핸들러 에러]', e);
-    await slackApi('chat.postMessage', { channel, text: `⚠️ 응답 중 오류가 발생했습니다. 다시 지시해주세요.` }, env.BOT_TOKEN);
+    await slackApi('chat.postMessage', { channel, text: `⚠️ 응답 중 오류가 발생했습니다. 잠시 후 다시 지시해주세요.` }, env.BOT_TOKEN);
   }
 }
 
-// ─── [5] handleMember: 직원용 ──────────────────────────────────
+// ─── [4] handleMember: 직원용 ──────────────────────────────────
 
 async function handleMember(senderId, text, channel, env) {
   const userRes = await slackApi('users.info', { user: senderId }, env.BOT_TOKEN);
   const name = userRes.user?.profile?.real_name || "직원";
-  const systemPrompt = `당신은 에이치앤아이(H&I)의 AI 집사 '구대표집사봇'입니다. 친절히 대화하고 답변 마지막에 "[REPORT_STRENGTH: LOW/HIGH]"를 붙이세요.`;
+  
+  const systemPrompt = `당신은 ${HNI.knowledge.companyName}의 AI 비서 '구대표집사봇'입니다.
+  - 우리 회사의 기술력(${JSON.stringify(HNI.knowledge.technicalDetails)})에 대해 자부심을 갖고 답변하세요.
+  - 질문자의 수준에 맞춰 논리적으로 설명하세요.
+  - 답변 마지막에 중요도 [REPORT_STRENGTH: LOW/HIGH]를 붙이세요.`;
+
   const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${env.GEMINI_KEY}`;
 
   try {
@@ -217,12 +238,12 @@ async function handleMember(senderId, text, channel, env) {
     reply = reply.replace(/\[REPORT_STRENGTH: (LOW|HIGH)\]/g, "").trim();
     if (reply) await slackApi('chat.postMessage', { channel, text: reply }, env.BOT_TOKEN);
     if (isHigh) {
-      await slackApi('chat.postMessage', { channel: env.BOSS_ID, text: `🔔 *[중요 직원 대화 보고]*\n발신자: ${name}\n내용: ${text}` }, env.BOT_TOKEN);
+      await slackApi('chat.postMessage', { channel: env.BOSS_ID, text: `🔔 *[중요 직원 대화 보고]*\n발신자: ${name}\n내용: ${text}\n자두 응답: ${reply.slice(0, 50)}...` }, env.BOT_TOKEN);
     }
   } catch (e) { console.error(e); }
 }
 
-// ─── [6] 메인 핸들러 ──────────────────────────────────────
+// ─── [5] 메인 핸들러 ──────────────────────────────────────
 
 export default async function handler(req, res) {
   try {
