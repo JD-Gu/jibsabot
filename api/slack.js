@@ -1,3 +1,13 @@
+/**
+ * [v13.7] 구대표집사봇(H&I) 실전 운영용 전문
+ * * 변경 및 업데이트 내역:
+ * 1. 유료 플랜(Pay-as-you-go) 최적화: RPM 제한 해제에 따른 고속 응답 모드 적용
+ * 2. 날짜 파싱 정밀 강화: 구글 캘린더의 영문 날짜(Thursday, April 9) 매칭 로직 보강
+ * 3. 정체성 확립: '자두' 별명 삭제 및 '구대표집사봇' 공식 명칭 통일
+ * 4. 타임아웃 방어: Vercel 30초 제한 방지를 위한 API 호출 병렬화 및 사용자 조회 최소화
+ * 5. 비공개 채널 대응: 영업지원 채널(#cmm-영업지원) 등 message.groups 이벤트 대응 로직
+ */
+
 import crypto from 'crypto';
 
 // ─── [1] 데이터 및 지식 베이스 (H&I 전 직원 마스터 데이터) ──────────────
@@ -71,7 +81,6 @@ function verifySlackRequest(req, rawBody, signingSecret) {
   return `v0=${hmac}` === signature;
 }
 
-// 💡 타임아웃 방지를 위해 개별 요청 시간을 12초로 제한
 async function fetchWithRetry(url, options, maxRetries = 2) {
   for (let i = 0; i <= maxRetries; i++) {
     const controller = new AbortController();
@@ -131,7 +140,7 @@ async function getChatContext(channel, token, limit = 10) {
   } catch (e) { return []; }
 }
 
-// ─── [3] handleBoss: 대표님 전용 (최적화 모드) ───────────────────────
+// ─── [3] handleBoss: 대표님 전용 (날짜 파싱 최적화 모드) ─────────────
 
 async function handleBoss(text, channel, threadTs, env) {
   const now = new Date();
@@ -141,16 +150,22 @@ async function handleBoss(text, channel, threadTs, env) {
   const tomorrow = new Date(now);
   tomorrow.setDate(tomorrow.getDate() + 1);
   const tomorrowKST = tomorrow.toLocaleString('ko-KR', optionsKST);
-  const tomorrowEN = tomorrow.toLocaleString('en-US', { timeZone: 'Asia/Seoul', month: 'long', day: 'numeric' });
-  const tomorrowDayEN = tomorrow.toLocaleString('en-US', { timeZone: 'Asia/Seoul', weekday: 'long' });
+  
+  const tomorrowMonthEN = tomorrow.toLocaleString('en-US', { timeZone: 'Asia/Seoul', month: 'long' });
+  const tomorrowDayNum = tomorrow.toLocaleString('en-US', { timeZone: 'Asia/Seoul', day: 'numeric' });
+  const tomorrowDayNameEN = tomorrow.toLocaleString('en-US', { timeZone: 'Asia/Seoul', weekday: 'long' });
 
-  console.log(`[BOSS] Processing: ${text}`);
+  console.log(`[BOSS] Input: ${text} | Target: ${tomorrowKST}`);
 
   const systemPrompt = `당신은 ${HNI.knowledge.companyName} 구자덕 대표님의 수석 비서 '${HNI.knowledge.botName}'입니다.
-  현재(오늘): ${nowKST}
-  내일: ${tomorrowKST} (영문: ${tomorrowDayEN}, ${tomorrowEN})
+  [날짜 매칭 가이드]
+  - 기준(오늘): ${nowKST}
+  - 타겟(내일): ${tomorrowKST} (영문: ${tomorrowDayNameEN}, ${tomorrowMonthEN} ${tomorrowDayNum})
   
-  일정 검색 시 구글 캘린더 데이터(${tomorrowDayEN}, ${tomorrowEN})를 기필코 찾아 논리적이고 객관적으로 보고하세요.`;
+  [핵심 임무]
+  1. 대표님이 '내일' 일정을 물으시면 반드시 report_management_status(category='calendar')를 실행하세요.
+  2. 구글 캘린더 데이터 내에 "When: ${tomorrowDayNameEN}, ${tomorrowMonthEN} ${tomorrowDayNum}" 혹은 숫자가 포함된 모든 일정을 샅샅이 뒤져 요약 보고하세요.
+  3. 모든 답변은 논리적이고 객관적인 데이터에 근거하여 상세히 수행하세요.`;
 
   const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${env.GEMINI_KEY}`;
 
@@ -188,7 +203,6 @@ async function handleBoss(text, channel, threadTs, env) {
           const historyRes = await slackApi('conversations.history', { channel: targetChannel.id, limit: 100 }, env.BOT_TOKEN);
           
           if (historyRes.ok) {
-            // 💡 최적화: users.info 호출을 생략하고 HNI.members와 이메일 치환만 사용하여 속도 확보
             const context = historyRes.messages.reverse().map(m => {
               const senderName = Object.keys(HNI.members).find(key => HNI.members[key].id === m.user) || m.user || "시스템";
               return `[발신:${senderName}] ${resolveEmailsInText(m.text)}`;
@@ -199,8 +213,8 @@ async function handleBoss(text, channel, threadTs, env) {
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({
                 contents: [
-                  { role: 'user', parts: [{ text: `지시: ${text}\n타겟: ${tomorrowDayEN}, ${tomorrowEN}\n데이터:\n${context}` }] },
-                  { role: 'user', parts: [{ text: `위 데이터에서 해당 날짜의 일정을 요약 보고하세요. 없으면 없다고 하세요.` }] }
+                  { role: 'user', parts: [{ text: `지시: ${text}\n타겟: ${tomorrowKST} (${tomorrowDayNameEN}, ${tomorrowMonthEN} ${tomorrowDayNum})\n원본데이터:\n${context}` }] },
+                  { role: 'user', parts: [{ text: `위 데이터에서 "${tomorrowMonthEN} ${tomorrowDayNum}" 혹은 "${tomorrowDayNameEN}"이 포함된 'When:' 줄을 기필코 찾아 내일 일정을 모두 리스트로 보고하세요. 중복 알림 속에서 최신 확정본만 골라내세요.` }] }
                 ]
               })
             });
@@ -213,8 +227,7 @@ async function handleBoss(text, channel, threadTs, env) {
     }
   } catch (e) {
     console.error("[CRITICAL BOSS ERROR]", e);
-    // 타임아웃 발생 시 사용자에게 안내
-    await slackApi('chat.postMessage', { channel, text: "⚠️ 데이터 분석량이 많아 처리가 지연되고 있습니다. 잠시 후 다시 시도해 주시겠습니까?", thread_ts: threadTs }, env.BOT_TOKEN);
+    await slackApi('chat.postMessage', { channel, text: "⚠️ 데이터 분석 중 지연이 발생했습니다. 다시 지시해 주시겠습니까?", thread_ts: threadTs }, env.BOT_TOKEN);
   }
 }
 
