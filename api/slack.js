@@ -12,7 +12,7 @@ const HNI = {
     '정현수': { id: null, dept: '플랫폼팀', role: '팀장' },
   },
   knowledge: {
-    tech: "GNSS/RTK 초정밀 측위(cm급), HI-PPE v4.0 임베디드 제어, AI라이브 플랫폼 연동, AI 엣지 비전 기술",
+    tech: "GNSS/RTK 초정밀 측위(cm급), HI-PPE 임베디드 제어, AI라이브 플랫폼 연동, AI 엣지 비전 기술",
     business: "LG유플러스 독점 파트너, 전국 200개 GNSS 기준국 운영, 자율주행 및 드론 정밀 항법 지원",
     vision: "국내 1위 초정밀 측위 플랫폼 기업 (H&I)"
   }
@@ -58,21 +58,15 @@ function verifySlackRequest(req, rawBody, signingSecret) {
   return `v0=${hmac}` === signature;
 }
 
-// [Vercel 최적화] 재시도 로직: 429 에러 시 자동으로 대기 후 재시도
 async function fetchWithRetry(url, options, maxRetries = 4) {
-  const delays = [1000, 2000, 4000, 8000]; // 1초, 2초, 4초, 8초 대기 (총 15초)
-  
+  const delays = [1000, 2000, 4000, 8000];
   for (let i = 0; i <= maxRetries; i++) {
     const controller = new AbortController();
     const id = setTimeout(() => controller.abort(), 15000); 
-    
     try {
       const response = await fetch(url, { ...options, signal: controller.signal });
       clearTimeout(id);
-      
-      // 429(Quota Exceeded) 혹은 5xx 에러인 경우 재시도
       if ((response.status === 429 || response.status >= 500) && i < maxRetries) {
-        console.log(`[Retry] Status ${response.status}, retrying in ${delays[i]}ms...`);
         await new Promise(resolve => setTimeout(resolve, delays[i]));
         continue;
       }
@@ -88,13 +82,8 @@ async function fetchWithRetry(url, options, maxRetries = 4) {
 async function slackApi(endpoint, body, token) {
   const isRead = endpoint.includes('.list') || endpoint.includes('.info') || endpoint.includes('.history') || endpoint.includes('search.');
   const method = isRead ? 'GET' : 'POST';
-  
   let url = `https://slack.com/api/${endpoint}`;
-  let options = {
-    method: method,
-    headers: { 'Authorization': `Bearer ${token}` }
-  };
-
+  let options = { method, headers: { 'Authorization': `Bearer ${token}` } };
   if (method === 'GET' && body) {
     const params = new URLSearchParams(body).toString();
     url += (params ? `?${params}` : '');
@@ -102,16 +91,8 @@ async function slackApi(endpoint, body, token) {
     options.headers['Content-Type'] = 'application/json; charset=utf-8';
     options.body = JSON.stringify(body);
   }
-
-  try {
-    const r = await fetchWithRetry(url, options);
-    const res = await r.json();
-    if (!res.ok) console.error(`[Slack API 응답 에러] ${endpoint}: ${res.error}`);
-    return res;
-  } catch (e) {
-    console.error(`[Slack API 에러] ${endpoint}:`, e);
-    return { ok: false, error: e.message };
-  }
+  const r = await fetchWithRetry(url, options);
+  return await r.json();
 }
 
 async function findUserIdByName(name, token) {
@@ -127,63 +108,37 @@ async function findUserIdByName(name, token) {
 
 async function handleBoss(text, channel, env) {
   console.log(`[대표님 지시 수신] ${text}`);
-  const systemPrompt = `당신은 에이치앤아이(H&I) 구자덕 대표님의 유능한 비서 '구대표집사봇'입니다. 
-  - 대표님의 명령을 즉각 수행하세요.
-  - 정중하고 명료하게 보고하세요.`;
-
-  const modelPath = "models/gemini-2.5-flash";
-  const url = `https://generativelanguage.googleapis.com/v1beta/${modelPath}:generateContent?key=${env.GEMINI_KEY}`;
-
-  const payload = {
-    contents: [{ parts: [{ text: text }] }],
-    system_instruction: { parts: [{ text: systemPrompt }] },
-    tools: GEMINI_TOOLS,
-    safetySettings: [
-      { category: "HARM_CATEGORY_HARASSMENT", threshold: "BLOCK_NONE" },
-      { category: "HARM_CATEGORY_HATE_SPEECH", threshold: "BLOCK_NONE" },
-      { category: "HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold: "BLOCK_NONE" },
-      { category: "HARM_CATEGORY_DANGEROUS_CONTENT", threshold: "BLOCK_NONE" }
-    ]
-  };
+  const systemPrompt = `당신은 에이치앤아이(H&I) 구자덕 대표님의 유능한 비서 '구대표집사봇'입니다. 싹싹하게 보고하세요.`;
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${env.GEMINI_KEY}`;
 
   try {
     const response = await fetchWithRetry(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload)
+      body: JSON.stringify({
+        contents: [{ parts: [{ text: text }] }],
+        system_instruction: { parts: [{ text: systemPrompt }] },
+        tools: GEMINI_TOOLS
+      })
     });
-    
     const data = await response.json();
-
-    // 재시도 후에도 에러인 경우 처리
-    if (data.error) {
-      if (data.error.code === 429) {
-        return await slackApi('chat.postMessage', { channel, text: "⏳ 현재 구글 엔진 사용량이 일시적으로 많습니다. 10~20초 후에 다시 한 번 말씀해 주시겠어요?" }, env.BOT_TOKEN);
-      }
-      throw new Error(data.error.message);
-    }
-
     const parts = data.candidates?.[0]?.content?.parts || [];
-    
-    if (parts.length === 0) {
-      await slackApi('chat.postMessage', { channel, text: "🤔 엔진에서 답변을 생성하지 못했습니다. 다시 말씀해 주세요." }, env.BOT_TOKEN);
-      return;
-    }
 
     for (const part of parts) {
-      if (part.text) {
-        await slackApi('chat.postMessage', { channel, text: part.text }, env.BOT_TOKEN);
-      }
+      if (part.text) await slackApi('chat.postMessage', { channel, text: part.text }, env.BOT_TOKEN);
       
       if (part.functionCall) {
         const { name, args } = part.functionCall;
         if (name === 'send_message') {
           let targetId = HNI.members[args.name]?.id || await findUserIdByName(args.name, env.BOT_TOKEN);
           if (targetId) {
+            // 💡 [v10.9 핵심 추가] 실제 발송 내용을 로그에 명시적으로 기록
+            console.log(`[최종 발송 확정] 대상: ${args.name}(ID:${targetId}), 메시지: ${args.message}`);
+            
             await slackApi('chat.postMessage', { channel: targetId, text: args.message }, env.BOT_TOKEN);
             await slackApi('chat.postMessage', { channel, text: `✅ 대표님, ${args.name}님께 메시지를 전송했습니다.` }, env.BOT_TOKEN);
           } else {
-            await slackApi('chat.postMessage', { channel, text: `❓ '${args.name}'님을 찾지 못했습니다. 실명을 확인해 주세요.` }, env.BOT_TOKEN);
+            await slackApi('chat.postMessage', { channel, text: `❓ '${args.name}'님을 찾지 못했습니다.` }, env.BOT_TOKEN);
           }
         }
         
@@ -195,26 +150,17 @@ async function handleBoss(text, channel, env) {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({
-                contents: [
-                  { role: 'user', parts: [{ text: text }] },
-                  { role: 'model', parts: [part] },
-                  { role: 'user', parts: [{ text: `검색 결과입니다:\n${context}\n위 내용을 대표님께 요약하여 보고하세요.` }] }
-                ]
+                contents: [{ role: 'user', parts: [{ text: text }] }, { role: 'model', parts: [part] }, { role: 'user', parts: [{ text: `검색 결과:\n${context}\n위 내용을 요약 보고하세요.` }] }]
               })
             });
             const sData = await summaryRes.json();
             const sReply = sData.candidates?.[0]?.content?.parts?.[0]?.text;
             if (sReply) await slackApi('chat.postMessage', { channel, text: sReply }, env.BOT_TOKEN);
-          } else {
-            await slackApi('chat.postMessage', { channel, text: "❓ 관련 경영 데이터를 슬랙에서 찾지 못했습니다." }, env.BOT_TOKEN);
           }
         }
       }
     }
-  } catch (e) {
-    console.error('[핸들러 에러]', e);
-    await slackApi('chat.postMessage', { channel, text: `⚠️ 구대표집사봇 엔진 응답 지연이 발생했습니다. 잠시 후 다시 시도해 주세요.` }, env.BOT_TOKEN);
-  }
+  } catch (e) { console.error('[에러]', e); }
 }
 
 // ─── [4] handleMember: 직원용 ──────────────────────────────────
@@ -222,7 +168,6 @@ async function handleBoss(text, channel, env) {
 async function handleMember(senderId, text, channel, env) {
   const userRes = await slackApi('users.info', { user: senderId }, env.BOT_TOKEN);
   const name = userRes.user?.profile?.real_name || "직원";
-
   const systemPrompt = `당신은 에이치앤아이(H&I)의 친절한 AI 집사 '구대표집사봇'입니다. 기술 질문(${HNI.knowledge.tech})에 답변하세요.`;
   const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${env.GEMINI_KEY}`;
 
@@ -230,17 +175,13 @@ async function handleMember(senderId, text, channel, env) {
     const response = await fetchWithRetry(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        contents: [{ parts: [{ text: text }] }],
-        system_instruction: { parts: [{ text: systemPrompt }] }
-      })
+      body: JSON.stringify({ contents: [{ parts: [{ text: text }] }], system_instruction: { parts: [{ text: systemPrompt }] } })
     });
     const data = await response.json();
     const reply = data.candidates?.[0]?.content?.parts?.[0]?.text;
     if (reply) await slackApi('chat.postMessage', { channel, text: reply }, env.BOT_TOKEN);
-
     if (text.length >= 5) {
-      await slackApi('chat.postMessage', { channel: env.BOSS_ID, text: `💬 [보고] ${name}: ${text}\n답변 요약: ${reply ? reply.slice(0, 30) : ""}...` }, env.BOT_TOKEN);
+      await slackApi('chat.postMessage', { channel: env.BOSS_ID, text: `💬 [보고] ${name}: ${text}` }, env.BOT_TOKEN);
     }
   } catch (e) { console.error(e); }
 }
@@ -252,24 +193,14 @@ export default async function handler(req, res) {
   const chunks = [];
   for await (const chunk of req) chunks.push(chunk);
   const rawBody = Buffer.concat(chunks).toString('utf8');
-
-  const env = {
-    BOT_TOKEN: process.env.SLACK_BOT_TOKEN,
-    BOSS_ID: process.env.BOSS_USER_ID,
-    GEMINI_KEY: process.env.GEMINI_API_KEY,
-    SIGNING_SECRET: process.env.SLACK_SIGNING_SECRET
-  };
-
+  const env = { BOT_TOKEN: process.env.SLACK_BOT_TOKEN, BOSS_ID: process.env.BOSS_USER_ID, GEMINI_KEY: process.env.GEMINI_API_KEY, SIGNING_SECRET: process.env.SLACK_SIGNING_SECRET };
   if (!verifySlackRequest(req, rawBody, env.SIGNING_SECRET)) return res.status(401).end();
   if (req.headers['x-slack-retry-num']) return res.status(200).send('ok');
-
   let body;
   try { body = JSON.parse(rawBody); } catch { return res.status(200).end(); }
   if (body.type === 'url_verification') return res.status(200).json({ challenge: body.challenge });
-
   const event = body.event;
   if (!event || event.bot_id || !event.text) return res.status(200).end();
-
   if (event.user === env.BOSS_ID) {
     await handleBoss(event.text.trim(), event.channel, env);
   } else {
@@ -277,5 +208,4 @@ export default async function handler(req, res) {
   }
   return res.status(200).send('ok');
 }
-
 export const config = { api: { bodyParser: false } };
