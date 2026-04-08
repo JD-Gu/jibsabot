@@ -132,9 +132,7 @@ async function handleBoss(text, channel, env) {
         if (name === 'send_message') {
           let targetId = HNI.members[args.name]?.id || await findUserIdByName(args.name, env.BOT_TOKEN);
           if (targetId) {
-            // 💡 [v10.9 핵심 추가] 실제 발송 내용을 로그에 명시적으로 기록
             console.log(`[최종 발송 확정] 대상: ${args.name}(ID:${targetId}), 메시지: ${args.message}`);
-            
             await slackApi('chat.postMessage', { channel: targetId, text: args.message }, env.BOT_TOKEN);
             await slackApi('chat.postMessage', { channel, text: `✅ 대표님, ${args.name}님께 메시지를 전송했습니다.` }, env.BOT_TOKEN);
           } else {
@@ -163,12 +161,15 @@ async function handleBoss(text, channel, env) {
   } catch (e) { console.error('[에러]', e); }
 }
 
-// ─── [4] handleMember: 직원용 ──────────────────────────────────
+// ─── [4] handleMember: 직원용 (답변 수신 및 대표님 보고) ──────────
 
 async function handleMember(senderId, text, channel, env) {
   const userRes = await slackApi('users.info', { user: senderId }, env.BOT_TOKEN);
   const name = userRes.user?.profile?.real_name || "직원";
-  const systemPrompt = `당신은 에이치앤아이(H&I)의 친절한 AI 집사 '구대표집사봇'입니다. 기술 질문(${HNI.knowledge.tech})에 답변하세요.`;
+  const systemPrompt = `당신은 주식회사 에이치앤아이(H&I)의 친절한 AI 비서 '구대표집사봇'입니다. 
+  직원의 질문에 기술적으로 답변하거나 고민을 들어주세요. 
+  기술 키워드: ${HNI.knowledge.tech}`;
+  
   const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${env.GEMINI_KEY}`;
 
   try {
@@ -179,9 +180,15 @@ async function handleMember(senderId, text, channel, env) {
     });
     const data = await response.json();
     const reply = data.candidates?.[0]?.content?.parts?.[0]?.text;
+    
+    // 1. 직원에게 집사봇의 답변 전송
     if (reply) await slackApi('chat.postMessage', { channel, text: reply }, env.BOT_TOKEN);
-    if (text.length >= 5) {
-      await slackApi('chat.postMessage', { channel: env.BOSS_ID, text: `💬 [보고] ${name}: ${text}` }, env.BOT_TOKEN);
+    
+    // 2. [핵심] 직원이 한 말을 대표님께 알림 (보고 기능)
+    // 5자 이상의 유의미한 메시지인 경우에만 보고하여 불필요한 알림 최소화
+    if (text.length >= 2) {
+      const reportMsg = `🔔 *[직원 응답 보고]*\n발신자: ${name}\n내용: ${text}\n---`;
+      await slackApi('chat.postMessage', { channel: env.BOSS_ID, text: reportMsg }, env.BOT_TOKEN);
     }
   } catch (e) { console.error(e); }
 }
