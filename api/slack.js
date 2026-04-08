@@ -22,7 +22,7 @@ const HNI = {
     companyName: "주식회사 에이치앤아이 (H&I)",
     ceo: "구자덕 대표이사",
     botName: "구대표집사봇",
-    coreTech: "GNSS/RTK 초정밀 측위(cm급), HI-PPE 지능형 안전 장구(v4.0), AI라이브 플랫폼, 비전 AI 엣지 기술",
+    coreTech: "GNSS/RTK 초정밀 측위(cm급), HI-PPE 지능형 초정밀 측위 엔지, AI라이브 플랫폼, 비전 AI 엣지 기술",
     vision: "초정밀 위치 정보를 기반으로 모든 이동의 안전과 지능화를 선도하는 국내 1위 측위 플랫폼 기업",
     management_channels: {
       finance: { name: "경영재무", id: "C02M8BMJZG9" }, 
@@ -129,15 +129,32 @@ async function getChatContext(channel, token, limit = 10) {
 // ─── [3] handleBoss: 대표님 전용 (날짜 파싱 최적화) ───────────────────
 
 async function handleBoss(text, channel, threadTs, env) {
-  const nowKST = new Date().toLocaleString('ko-KR', { timeZone: 'Asia/Seoul', year: 'numeric', month: 'long', day: 'numeric', weekday: 'long' });
-  console.log(`[BOSS] Input: ${text} | BaseDate: ${nowKST}`);
+  // 💡 실시간 날짜 정보를 영어 포맷까지 포함하여 생성 (Gemini 가이드용)
+  const now = new Date();
+  const optionsKST = { timeZone: 'Asia/Seoul', year: 'numeric', month: 'long', day: 'numeric', weekday: 'long' };
+  const nowKST = now.toLocaleString('ko-KR', optionsKST);
+  
+  // 내일 날짜 계산
+  const tomorrow = new Date(now);
+  tomorrow.setDate(tomorrow.getDate() + 1);
+  const tomorrowKST = tomorrow.toLocaleString('ko-KR', optionsKST);
+  const tomorrowEN = tomorrow.toLocaleString('en-US', { timeZone: 'Asia/Seoul', month: 'long', day: 'numeric' }); // 예: April 9
+  const tomorrowDayEN = tomorrow.toLocaleString('en-US', { timeZone: 'Asia/Seoul', weekday: 'long' }); // 예: Thursday
+
+  console.log(`[BOSS] Input: ${text} | Today: ${nowKST} | TomorrowTarget: ${tomorrowDayEN}, ${tomorrowEN}`);
 
   const systemPrompt = `당신은 ${HNI.knowledge.companyName} 구자덕 대표님의 수석 비서 '${HNI.knowledge.botName}'입니다.
-  [날짜 가이드]
-  - 현재 시각: ${nowKST}
-  - 구글 캘린더 데이터는 "When: Thursday, April 9, 2026" 형식을 사용합니다.
-  - 대표님이 '내일'이라고 하면, 위 기준 시각을 바탕으로 정확한 요일과 날짜(예: April 9)를 계산하여 검색하세요.
-  - 모든 보고는 논리적이고 객관적인 데이터에 근거하여 상세히 수행하세요.`;
+  
+  [날짜 마스터 정보]
+  - 현재(오늘): ${nowKST}
+  - 내일(Target): ${tomorrowKST} (영문: ${tomorrowDayEN}, ${tomorrowEN})
+  
+  [일정 검색 특화 지침]
+  1. 구글 캘린더 데이터는 반드시 "When: ${tomorrowDayEN}, ${tomorrowEN}, 2026" 형식을 포함하고 있습니다.
+  2. 대표님이 '내일' 일정을 물으면, 데이터 내에서 "${tomorrowDayEN}, ${tomorrowEN}" 문자열이 포함된 'When:' 라인을 필사적으로 찾으세요.
+  3. 'Event updated!' 메시지의 경우, 여러 날짜 중 가장 아래에 있는 정보가 최신입니다.
+  4. 캘린더 데이터 내에 메일 주소가 있으면 HNI 멤버 명단을 참고하여 실명으로 변환하여 보고하세요.
+  5. 데이터가 존재함에도 찾지 못했다고 하는 것은 중대한 실수입니다. 꼼꼼히 훑으세요.`;
 
   const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${env.GEMINI_KEY}`;
 
@@ -182,8 +199,8 @@ async function handleBoss(text, channel, threadTs, env) {
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({
                 contents: [
-                  { role: 'user', parts: [{ text: `대표님 지시: ${text}\n현재기준: ${nowKST}\n분석대상데이터:\n${context}` }] },
-                  { role: 'user', parts: [{ text: `[최종 지침] 위 데이터에서 대표님이 요청하신 날짜(예: 4월 9일/Thursday, April 9)와 일치하는 'When:' 정보를 모두 찾아 보고하세요. 중복되거나 취소된 일정은 제외하고 최종 확정된 내용만 깔끔하게 정리하세요. 데이터가 없으면 '찾지 못했다'고 명확히 보고하세요.` }] }
+                  { role: 'user', parts: [{ text: `대표님 지시: ${text}\n내일날짜기준: ${tomorrowKST} (${tomorrowDayEN}, ${tomorrowEN})\n분석대상데이터:\n${context}` }] },
+                  { role: 'user', parts: [{ text: `[최종 지침] 위 데이터에서 "${tomorrowDayEN}, ${tomorrowEN}"과 일치하는 'When:' 정보를 모두 찾아 보고하세요. 중복되거나 취소된 일정은 제외하고 최종 확정된 내용만 깔끔하게 정리하세요. 데이터가 있으면 절대 '없다'고 하지 마세요.` }] }
                 ]
               })
             });
