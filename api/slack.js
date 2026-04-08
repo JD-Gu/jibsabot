@@ -140,7 +140,7 @@ async function getChatContext(channel, token, limit = 8) {
 
 async function handleBoss(text, channel, env) {
   const nowKST = new Date().toLocaleString('ko-KR', { timeZone: 'Asia/Seoul' });
-  console.log(`[대표님 지시] ${text} | 기준시각: ${nowKST}`);
+  console.log(`[대표님 지시 수신] ${text} | 기준시각: ${nowKST}`);
   
   const systemPrompt = `당신은 에이치앤아이(H&I) 구대표님의 전담 비서 '구대표집사봇'입니다.
   현재 시각: ${nowKST}
@@ -149,7 +149,7 @@ async function handleBoss(text, channel, env) {
   1. 구글 캘린더 메시지는 'Event updated!', '15 minutes until...', 'Event cancelled.' 등 중복 알림이 많습니다.
   2. 반드시 'When:' 필드에 적힌 날짜와 시간을 기준으로 판단하세요.
   3. 'Event updated!' 메시지의 경우, 여러 개의 'When:'이 있으면 가장 아래(최신) 정보를 유효한 것으로 간주하세요.
-  4. '내일' 일정을 물으면 ${nowKST} 기준 다음 날짜(예: 4월 9일)의 모든 일정을 찾아 리스트로 보고하세요.
+  4. '내일' 일정을 물으면 ${nowKST} 기준 다음 날짜의 모든 일정을 찾아 리스트로 보고하세요.
   5. 정보가 누락되지 않도록 꼼꼼히 훑으세요.`;
 
   const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${env.GEMINI_KEY}`;
@@ -189,7 +189,6 @@ async function handleBoss(text, channel, env) {
         
         if (name === 'report_management_status') {
           const targetChannel = HNI.knowledge.management_channels[args.category];
-          // 💡 조회 범위를 100개로 유지하여 충분한 데이터를 확보
           const historyRes = await slackApi('conversations.history', { channel: targetChannel.id, limit: 100 }, env.BOT_TOKEN);
           
           if (historyRes.ok && historyRes.messages.length > 0) {
@@ -212,7 +211,7 @@ async function handleBoss(text, channel, env) {
               body: JSON.stringify({
                 contents: [
                   { role: 'user', parts: [{ text: `기준 시각: ${nowKST}\n대표님 지시: ${text}\n\n[채널 데이터]\n${context}` }] },
-                  { role: 'user', parts: [{ text: `위 데이터에서 대표님이 요청하신 날짜의 일정만 골라내어 명확하게 보고하세요. 취소된 일정(cancelled)은 제외하고, 업데이트된 일정(updated)은 최종 시간을 반영하세요.` }] }
+                  { role: 'user', parts: [{ text: `위 데이터에서 대표님이 요청하신 날짜의 일정만 골라내어 명확하게 보고하세요. 취소된 일정은 제외하고, 업데이트된 일정은 최종 시간을 반영하세요.` }] }
                 ]
               })
             });
@@ -234,7 +233,7 @@ async function handleBoss(text, channel, env) {
 async function handleMember(senderId, text, channel, env) {
   const userRes = await slackApi('users.info', { user: senderId }, env.BOT_TOKEN);
   const name = userRes.user?.profile?.real_name || "직원";
-  const systemPrompt = `당신은 H&I AI 집사입니다. 친절히 대화하고 마지막에 [REPORT_STRENGTH: LOW/HIGH]를 붙이세요.`;
+  const systemPrompt = `당신은 에이치앤아이(H&I) AI 집사입니다. 친절히 대화하고 마지막에 [REPORT_STRENGTH: LOW/HIGH]를 붙이세요.`;
   const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${env.GEMINI_KEY}`;
 
   try {
@@ -252,7 +251,7 @@ async function handleMember(senderId, text, channel, env) {
     if (isHigh) {
       await slackApi('chat.postMessage', { channel: env.BOSS_ID, text: `🔔 *[중요 직원 대화 보고]*\n발신자: ${name}\n내용: ${text}` }, env.BOT_TOKEN);
     }
-  } catch (e) { console.error(e); }
+  } catch (e) { console.error('[직원 응대 에러]', e); }
 }
 
 // ─── [5] 메인 핸들러 ──────────────────────────────────────
@@ -263,13 +262,36 @@ export default async function handler(req, res) {
     const chunks = [];
     for await (const chunk of req) chunks.push(chunk);
     const rawBody = Buffer.concat(chunks).toString('utf8');
-    const env = { BOT_TOKEN: process.env.SLACK_BOT_TOKEN, BOSS_ID: process.env.BOSS_USER_ID, GEMINI_KEY: process.env.GEMINI_API_KEY, SIGNING_SECRET: process.env.SLACK_SIGNING_SECRET };
+    
+    const env = { 
+      BOT_TOKEN: process.env.SLACK_BOT_TOKEN, 
+      BOSS_ID: process.env.BOSS_USER_ID, 
+      GEMINI_KEY: process.env.GEMINI_API_KEY, 
+      SIGNING_SECRET: process.env.SLACK_SIGNING_SECRET 
+    };
+
     if (!verifySlackRequest(req, rawBody, env.SIGNING_SECRET)) return res.status(401).end();
     if (req.headers['x-slack-retry-num']) return res.status(200).send('ok');
+    
     let body;
     try { body = JSON.parse(rawBody); } catch (e) { return res.status(200).end(); }
     if (body.type === 'url_verification') return res.status(200).json({ challenge: body.challenge });
+    
     const event = body.event;
     if (!event || event.bot_id || !event.text) return res.status(200).end();
+    
     if (event.user === env.BOSS_ID) {
       await handleBoss(event.text.trim(), event.channel, env);
+    } else {
+      await handleMember(event.user, event.text.trim(), event.channel, env);
+    }
+    
+    return res.status(200).send('ok');
+  } catch (globalError) {
+    console.error('[CRITICAL RUNTIME ERROR]', globalError);
+    return res.status(200).send('error handled');
+  }
+}
+
+export const config = { api: { bodyParser: false } };
+console.log("[H&I Slack Bot] Script Loaded Successfully");
