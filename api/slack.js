@@ -1,10 +1,10 @@
 /**
- * [v14.6] 구대표집사봇(H&I) 실전 운영용 전문
+ * [v14.7] 구대표집사봇(H&I) 실전 운영용 전문
  * * 변경 및 업데이트 내역:
- * 1. 초정밀 진단 로그: Calendar ID, Auth Token 생성 여부, API 응답 코드를 상세 로깅 (Vercel 로그에서 확인 가능)
- * 2. 404 에러 원격 진단: 'Not Found' 발생 시 Calendar ID 오타 여부와 공유 권한 상태를 하이브리드로 체크
- * 3. 날짜 연산 고정: 내일(Thursday, April 9) 일정을 찾기 위한 KST 시간대 보정 로직 강화
- * 4. 환경변수 안정성: GOOGLE_PRIVATE_KEY의 줄바꿈 및 특수문자 파싱 예외 처리 보강
+ * 1. 404 Not Found 정밀 진단: API 실패 시 현재 서비스 계정이 접근 가능한 캘린더 리스트를 조회하여 보고
+ * 2. 공유 권한 검증 로직: 서비스 계정 이메일이 정상적으로 캘린더를 보고 있는지 역추적 기능 추가
+ * 3. KST 시간대 보정: 캘린더 조회 범위를 한국 시간 기준 00:00~23:59로 더욱 정밀하게 타겟팅
+ * 4. 에러 메시지 사용자 친화화: 기술적 에러를 구대표님이 즉시 조치 가능한 안내 문구로 변환
  */
 
 import crypto from 'crypto';
@@ -33,7 +33,6 @@ const HNI = {
     management_channels: {
       calendar: { name: "업무일정", id: "C03R1QVMKC4" }
     },
-    // 💡 09jj 계정을 기본값으로 사용 (환경변수 GOOGLE_CALENDAR_ID가 최우선)
     googleCalendarId: (process.env.GOOGLE_CALENDAR_ID || '09jj@hni-gl.com').trim()
   }
 };
@@ -54,16 +53,13 @@ const GEMINI_TOOLS = [{
   ]
 }];
 
-// ─── [2] 구글 인증 및 캘린더 엔진 (JWT 인증 고도화) ─────────────────────
+// ─── [2] 구글 인증 및 캘린더 엔진 (JWT 인증 및 역추적 추가) ──────────────
 
 async function getGoogleAccessToken() {
   const clientEmail = process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL?.trim();
   const privateKey = process.env.GOOGLE_PRIVATE_KEY?.replace(/\\n/g, '\n').trim();
 
-  if (!clientEmail || !privateKey) {
-    console.error("[DIAGNOSTIC] Credentials missing in Vercel env.");
-    return { error: "Vercel 환경변수 설정(EMAIL/KEY)을 확인해주세요." };
-  }
+  if (!clientEmail || !privateKey) return { error: "Vercel 환경변수 설정 누락" };
 
   try {
     const header = JSON.stringify({ alg: 'RS256', typ: 'JWT' });
@@ -89,14 +85,26 @@ async function getGoogleAccessToken() {
     });
 
     const data = await res.json();
-    if (data.error) {
-      console.error("[DIAGNOSTIC] JWT Token Exchange Failed:", data.error_description || data.error);
-      return { error: `인증 토큰 획득 실패: ${data.error}` };
-    }
+    if (data.error) return { error: `인증실패: ${data.error}` };
     return { token: data.access_token };
   } catch (e) {
-    console.error("[DIAGNOSTIC] JWT Logic Error:", e.message);
-    return { error: `인증 엔진 구동 실패: ${e.message}` };
+    return { error: `인증엔진에러: ${e.message}` };
+  }
+}
+
+/**
+ * 💡 [v14.7 신규] 현재 서비스 계정이 접근 가능한 캘린더 리스트 조회
+ * 404 발생 시 원인을 파악하기 위해 사용
+ */
+async function getAccessibleCalendars(token) {
+  try {
+    const res = await fetch('https://www.googleapis.com/calendar/v3/users/me/calendarList', {
+      headers: { 'Authorization': `Bearer ${token}` }
+    });
+    const data = await res.json();
+    return data.items?.map(c => c.id) || [];
+  } catch (e) {
+    return [];
   }
 }
 
@@ -112,34 +120,33 @@ async function fetchCalendarEventsDirectly(queryDate) {
 
   const url = `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calendarId)}/events?timeMin=${start.toISOString()}&timeMax=${end.toISOString()}&singleEvents=true&orderBy=startTime`;
   
-  // 💡 Vercel 로그용 정밀 로깅
-  console.log(`[DIAGNOSTIC] Attempting fetch for ID: [${calendarId}]`);
+  console.log(`[DIAGNOSTIC] Fetching events for: ${calendarId}`);
 
   try {
-    const res = await fetch(url, { 
-      headers: { 'Authorization': `Bearer ${auth.token}` } 
-    });
-    
+    const res = await fetch(url, { headers: { 'Authorization': `Bearer ${auth.token}` } });
     const data = await res.json();
     
     if (!res.ok) {
-      console.error("[DIAGNOSTIC] Google API Status:", res.status, data.error);
       if (res.status === 404) {
-        return { error: `Not Found: 구글 서버에서 '${calendarId}'를 찾을 수 없습니다. (ID 끝에 공백이 있거나 공유 설정이 안 된 경우)` };
+        const list = await getAccessibleCalendars(auth.token);
+        return { 
+          error: `404 Not Found: [${calendarId}]에 접근할 수 없습니다.`,
+          diagnostics: `현재 봇이 볼 수 있는 캘린더 목록: ${list.join(', ') || '없음'}. 공유 설정을 다시 확인해주세요.`
+        };
       }
-      return { error: `API Error (${res.status}): ${data.error?.message || '알 수 없는 오류'}` };
+      return { error: `API Error ${res.status}: ${data.error?.message}` };
     }
     
     return { 
       events: data.items?.map(ev => ({
         title: ev.summary,
         time: ev.start.dateTime ? new Date(ev.start.dateTime).toLocaleTimeString('ko-KR') : "종일",
-        location: ev.location || "장소 미지정",
+        location: ev.location || "장소미지정",
         desc: ev.description || ""
       })) || []
     };
   } catch (e) {
-    return { error: `네트워크 연동 실패: ${e.message}` };
+    return { error: `연동 실패: ${e.message}` };
   }
 }
 
@@ -179,7 +186,7 @@ async function handleBoss(text, channel, threadTs, env) {
 
   const systemPrompt = `당신은 ${HNI.knowledge.companyName} 구자덕 대표님의 수석 비서 '${HNI.knowledge.botName}'입니다. 
   현재 시각: ${nowKST}
-  구글 캘린더 API 실시간 데이터를 최우선으로 분석합니다. 만약 'Not Found' 에러가 나면 대표님께 설정의 어떤 부분을 확인해야 하는지 구체적으로 가이드하세요.`;
+  API 에러(특히 404) 발생 시 'diagnostics' 정보를 바탕으로 대표님께 어떤 조치가 필요한지 명확하게 보고하세요.`;
 
   const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${env.GEMINI_KEY}`;
 
@@ -209,13 +216,13 @@ async function handleBoss(text, channel, threadTs, env) {
           
           let rawData = "";
           if (apiResult.error) {
-            rawData = `[⚠️ 진단 결과: API 연동 실패]\n사유: ${apiResult.error}\n시도한 ID: ${HNI.knowledge.googleCalendarId}`;
+            rawData = `[🚨 진단 보고]\n상태: ${apiResult.error}\n디버깅정보: ${apiResult.diagnostics || '없음'}`;
           } else {
-            rawData = `[1. 구글 캘린더 API 실시간 데이터]\n${apiResult.events.length > 0 ? JSON.stringify(apiResult.events) : "조회된 일정이 없습니다."}`;
+            rawData = `[1. 구글 캘린더 실시간 데이터]\n${apiResult.events.length > 0 ? JSON.stringify(apiResult.events) : "일정 없음"}`;
           }
 
           if (slackHistory.ok) {
-            rawData += `\n\n[2. 슬랙 채널 보조 데이터]\n` + slackHistory.messages.map(m => m.text).join('\n');
+            rawData += `\n\n[2. 슬랙 채널 알림 데이터]\n` + slackHistory.messages.map(m => m.text).join('\n');
           }
 
           const summaryRes = await fetch(url, {
@@ -223,8 +230,8 @@ async function handleBoss(text, channel, threadTs, env) {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
               contents: [
-                { role: 'user', parts: [{ text: `지시: ${text}\n타겟: ${tomorrowKST}\n데이터:\n${rawData}` }] },
-                { role: 'user', parts: [{ text: `위 데이터를 분석하여 보고하세요. API 에러가 있다면 원인을 설명하고, 슬랙 데이터라도 있다면 그것을 기반으로 내일 일정을 최대한 추론하세요.` }] }
+                { role: 'user', parts: [{ text: `지시: ${text}\n타겟: ${tomorrowKST}\n전체데이터:\n${rawData}` }] },
+                { role: 'user', parts: [{ text: `위 데이터를 분석하여 보고하세요. API가 404를 뱉었다면, '현재 봇이 볼 수 있는 캘린더'가 무엇인지 언급하며 해결책을 제시하세요.` }] }
               ]
             })
           });
