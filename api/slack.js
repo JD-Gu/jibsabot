@@ -156,8 +156,13 @@ async function handleBoss(text, channel, env) {
           let targetId = HNI.members[args.name]?.id || await findUserIdByName(args.name, env.BOT_TOKEN);
           if (targetId) {
             console.log(`[업무 수행] 대상: ${args.name}, 내용: ${args.message}`);
+            
+            // 1. 직원에게 메시지 발송
             await slackApi('chat.postMessage', { channel: targetId, text: args.message }, env.BOT_TOKEN);
-            await slackApi('chat.postMessage', { channel, text: `✅ 대표님, 말씀하신 대로 ${args.name}님께 메시지를 전달했습니다.` }, env.BOT_TOKEN);
+            
+            // 2. 대표님께 발송 내용 요약 보고 (내용 포함)
+            const confirmationMsg = `✅ 대표님, ${args.name}님께 다음 메시지를 전달했습니다:\n> ${args.message}`;
+            await slackApi('chat.postMessage', { channel, text: confirmationMsg }, env.BOT_TOKEN);
           } else {
             await slackApi('chat.postMessage', { channel, text: `❓ 대표님, '${args.name}'님을 슬랙 명단에서 찾지 못했습니다.` }, env.BOT_TOKEN);
           }
