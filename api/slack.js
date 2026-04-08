@@ -310,8 +310,8 @@ if (event.user === BOSS_USER_ID) {
   return res.status(200).end();
 }
 
-  // 메시지 이벤트
-  if (event.type === 'message' && event.text) {
+  // 메시지 이벤트 (type 체크 완화)
+  if (event.text) {
     const senderId = event.user;
     const text     = event.text.trim();
     const channel  = event.channel;
