@@ -22,7 +22,7 @@ const HNI = {
     companyName: "주식회사 에이치앤아이 (H&I)",
     ceo: "구자덕 대표이사",
     botName: "구대표집사봇",
-    coreTech: "GNSS/RTK 초정밀 측위(cm급), HI-PPE 지능형 초정밀 측위 엔지, AI라이브 플랫폼, 비전 AI 엣지 기술",
+    coreTech: "GNSS/RTK 초정밀 측위(cm급), HI-PPE 지능형 초정밀 측위 엔진, AI라이브 플랫폼, 비전 AI 엣지 기술",
     vision: "초정밀 위치 정보를 기반으로 모든 이동의 안전과 지능화를 선도하는 국내 1위 측위 플랫폼 기업",
     management_channels: {
       finance: { name: "경영재무", id: "C02M8BMJZG9" }, 
@@ -71,18 +71,23 @@ function verifySlackRequest(req, rawBody, signingSecret) {
   return `v0=${hmac}` === signature;
 }
 
+// 💡 타임아웃 방지를 위해 개별 요청 시간을 12초로 제한
 async function fetchWithRetry(url, options, maxRetries = 2) {
   for (let i = 0; i <= maxRetries; i++) {
     const controller = new AbortController();
-    const id = setTimeout(() => controller.abort(), 25000); 
+    const id = setTimeout(() => controller.abort(), 12000); 
     try {
       const response = await fetch(url, { ...options, signal: controller.signal });
       clearTimeout(id);
+      if (response.status === 429 && i < maxRetries) {
+        await new Promise(resolve => setTimeout(resolve, 1000));
+        continue;
+      }
       return response;
     } catch (e) {
       clearTimeout(id);
       if (i === maxRetries) throw e;
-      await new Promise(resolve => setTimeout(resolve, 1000));
+      await new Promise(resolve => setTimeout(resolve, 500));
     }
   }
 }
@@ -126,35 +131,26 @@ async function getChatContext(channel, token, limit = 10) {
   } catch (e) { return []; }
 }
 
-// ─── [3] handleBoss: 대표님 전용 (날짜 파싱 최적화) ───────────────────
+// ─── [3] handleBoss: 대표님 전용 (최적화 모드) ───────────────────────
 
 async function handleBoss(text, channel, threadTs, env) {
-  // 💡 실시간 날짜 정보를 영어 포맷까지 포함하여 생성 (Gemini 가이드용)
   const now = new Date();
   const optionsKST = { timeZone: 'Asia/Seoul', year: 'numeric', month: 'long', day: 'numeric', weekday: 'long' };
   const nowKST = now.toLocaleString('ko-KR', optionsKST);
   
-  // 내일 날짜 계산
   const tomorrow = new Date(now);
   tomorrow.setDate(tomorrow.getDate() + 1);
   const tomorrowKST = tomorrow.toLocaleString('ko-KR', optionsKST);
-  const tomorrowEN = tomorrow.toLocaleString('en-US', { timeZone: 'Asia/Seoul', month: 'long', day: 'numeric' }); // 예: April 9
-  const tomorrowDayEN = tomorrow.toLocaleString('en-US', { timeZone: 'Asia/Seoul', weekday: 'long' }); // 예: Thursday
+  const tomorrowEN = tomorrow.toLocaleString('en-US', { timeZone: 'Asia/Seoul', month: 'long', day: 'numeric' });
+  const tomorrowDayEN = tomorrow.toLocaleString('en-US', { timeZone: 'Asia/Seoul', weekday: 'long' });
 
-  console.log(`[BOSS] Input: ${text} | Today: ${nowKST} | TomorrowTarget: ${tomorrowDayEN}, ${tomorrowEN}`);
+  console.log(`[BOSS] Processing: ${text}`);
 
   const systemPrompt = `당신은 ${HNI.knowledge.companyName} 구자덕 대표님의 수석 비서 '${HNI.knowledge.botName}'입니다.
+  현재(오늘): ${nowKST}
+  내일: ${tomorrowKST} (영문: ${tomorrowDayEN}, ${tomorrowEN})
   
-  [날짜 마스터 정보]
-  - 현재(오늘): ${nowKST}
-  - 내일(Target): ${tomorrowKST} (영문: ${tomorrowDayEN}, ${tomorrowEN})
-  
-  [일정 검색 특화 지침]
-  1. 구글 캘린더 데이터는 반드시 "When: ${tomorrowDayEN}, ${tomorrowEN}, 2026" 형식을 포함하고 있습니다.
-  2. 대표님이 '내일' 일정을 물으면, 데이터 내에서 "${tomorrowDayEN}, ${tomorrowEN}" 문자열이 포함된 'When:' 라인을 필사적으로 찾으세요.
-  3. 'Event updated!' 메시지의 경우, 여러 날짜 중 가장 아래에 있는 정보가 최신입니다.
-  4. 캘린더 데이터 내에 메일 주소가 있으면 HNI 멤버 명단을 참고하여 실명으로 변환하여 보고하세요.
-  5. 데이터가 존재함에도 찾지 못했다고 하는 것은 중대한 실수입니다. 꼼꼼히 훑으세요.`;
+  일정 검색 시 구글 캘린더 데이터(${tomorrowDayEN}, ${tomorrowEN})를 기필코 찾아 논리적이고 객관적으로 보고하세요.`;
 
   const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${env.GEMINI_KEY}`;
 
@@ -189,18 +185,22 @@ async function handleBoss(text, channel, threadTs, env) {
         
         if (name === 'report_management_status') {
           const targetChannel = HNI.knowledge.management_channels[args.category];
-          // 💡 유료 플랜이므로 넉넉하게 100개의 데이터를 훑음
           const historyRes = await slackApi('conversations.history', { channel: targetChannel.id, limit: 100 }, env.BOT_TOKEN);
           
           if (historyRes.ok) {
-            const context = historyRes.messages.reverse().map(m => `[발신:${m.user}] ${resolveEmailsInText(m.text)}`).join('\n\n');
+            // 💡 최적화: users.info 호출을 생략하고 HNI.members와 이메일 치환만 사용하여 속도 확보
+            const context = historyRes.messages.reverse().map(m => {
+              const senderName = Object.keys(HNI.members).find(key => HNI.members[key].id === m.user) || m.user || "시스템";
+              return `[발신:${senderName}] ${resolveEmailsInText(m.text)}`;
+            }).join('\n\n');
+
             const summaryRes = await fetchWithRetry(url, {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({
                 contents: [
-                  { role: 'user', parts: [{ text: `대표님 지시: ${text}\n내일날짜기준: ${tomorrowKST} (${tomorrowDayEN}, ${tomorrowEN})\n분석대상데이터:\n${context}` }] },
-                  { role: 'user', parts: [{ text: `[최종 지침] 위 데이터에서 "${tomorrowDayEN}, ${tomorrowEN}"과 일치하는 'When:' 정보를 모두 찾아 보고하세요. 중복되거나 취소된 일정은 제외하고 최종 확정된 내용만 깔끔하게 정리하세요. 데이터가 있으면 절대 '없다'고 하지 마세요.` }] }
+                  { role: 'user', parts: [{ text: `지시: ${text}\n타겟: ${tomorrowDayEN}, ${tomorrowEN}\n데이터:\n${context}` }] },
+                  { role: 'user', parts: [{ text: `위 데이터에서 해당 날짜의 일정을 요약 보고하세요. 없으면 없다고 하세요.` }] }
                 ]
               })
             });
@@ -211,7 +211,11 @@ async function handleBoss(text, channel, threadTs, env) {
         }
       }
     }
-  } catch (e) { console.error("[CRITICAL BOSS ERROR]", e); }
+  } catch (e) {
+    console.error("[CRITICAL BOSS ERROR]", e);
+    // 타임아웃 발생 시 사용자에게 안내
+    await slackApi('chat.postMessage', { channel, text: "⚠️ 데이터 분석량이 많아 처리가 지연되고 있습니다. 잠시 후 다시 시도해 주시겠습니까?", thread_ts: threadTs }, env.BOT_TOKEN);
+  }
 }
 
 // ─── [4] handleMember: 임직원 응대 ────────────────────────────────
@@ -220,7 +224,7 @@ async function handleMember(senderId, text, channel, threadTs, env) {
   const userRes = await slackApi('users.info', { user: senderId }, env.BOT_TOKEN);
   const name = userRes.user?.profile?.real_name || "임직원";
   const systemPrompt = `당신은 ${HNI.knowledge.companyName}의 공식 AI 비서 '${HNI.knowledge.botName}'입니다. 
-  직원들에게 친절하고 전문적으로 답하고 답변 끝에 [REPORT_STRENGTH: LOW/HIGH]를 붙이세요.`;
+  친절하고 전문적으로 답하고 답변 끝에 [REPORT_STRENGTH: LOW/HIGH]를 붙이세요.`;
 
   const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${env.GEMINI_KEY}`;
 
@@ -229,10 +233,7 @@ async function handleMember(senderId, text, channel, threadTs, env) {
     const response = await fetchWithRetry(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ 
-        contents: [...history, { role: "user", parts: [{ text }] }], 
-        system_instruction: { parts: [{ text: systemPrompt }] } 
-      })
+      body: JSON.stringify({ contents: [...history, { role: "user", parts: [{ text }] }], system_instruction: { parts: [{ text: systemPrompt }] } })
     });
     const data = await response.json();
     let reply = data.candidates?.[0]?.content?.parts?.[0]?.text || "";
