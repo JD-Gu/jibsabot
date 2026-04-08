@@ -1,11 +1,12 @@
 import crypto from 'crypto';
 
-// ─── [1] 데이터 및 지식 베이스 (집사봇의 학습 데이터) ──────────────────
+// ─── [1] 데이터 및 지식 베이스 ──────────────────────────────────
 const HNI = {
   members: {
     '이종혁': { id: 'U02M86NGGM7', dept: '제품본부', role: '본부장' },
     '김대수': { id: 'U03M1SGS352', dept: '경영본부', role: '본부장' },
     '김인구': { id: 'U02M755LQHM', dept: '서비스지원팀', role: '팀장' },
+    '구자덕': { id: 'U02M1T5E1N3', dept: '경영진', role: '대표이사' }, // 대표님 ID 명시적 추가
     '김봉석': { id: null, dept: '기술연구소', role: '소장' },
     '김찬영': { id: null, dept: '기술연구소', role: '연구원' },
     '이지민': { id: null, dept: '상품관리팀', role: '팀장' },
@@ -134,16 +135,13 @@ async function getChatContext(channel, token, limit = 8) {
     }));
 }
 
-// ─── [3] handleBoss: 대표님용 (경영 보고 + 일정 확인) ───────────────────
+// ─── [3] handleBoss: 대표님용 (맥락 + 자동 이름 매핑 강화) ──────────────────
 
 async function handleBoss(text, channel, env) {
   console.log(`[대표님 지시 수신] ${text}`);
   const systemPrompt = `당신은 ${HNI.knowledge.companyName} 구대표님의 전담 비서 '구대표집사봇'입니다. 
-  1. 경영현황 및 일정 질문 시 다음을 참고하세요:
-     - 재무현황: #cmm-cxo (category: 'finance')
-     - 영업현황: #cmm-영업지원 (category: 'sales')
-     - 업무일정: #업무일정(구글캘린더) (category: 'calendar')
-  2. 일정이 나열된 경우, 오늘 또는 가까운 미래의 핵심 일정을 우선 보고하세요.
+  1. 경영현황 및 일정 질문 시 해당 채널 정보를 훑어보고 실명 위주로 보고하세요.
+  2. 슬랙 ID가 보이면 사람 이름으로 치환하여 자연스럽게 보고하세요.
   3. 싹싹하고 전문적으로 대답하세요.`;
 
   const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${env.GEMINI_KEY}`;
@@ -162,7 +160,7 @@ async function handleBoss(text, channel, env) {
     
     const data = await response.json();
     if (data.error && data.error.code === 429) {
-      return await slackApi('chat.postMessage', { channel, text: "⏳ 구대표님, 엔진 사용량이 많아 1분 후 다시 시도해 주세요." }, env.BOT_TOKEN);
+      return await slackApi('chat.postMessage', { channel, text: "⏳ 구대표님, 엔진 사용량이 많아 잠시 후 다시 시도해 주세요." }, env.BOT_TOKEN);
     }
 
     const parts = data.candidates?.[0]?.content?.parts || [];
@@ -183,25 +181,39 @@ async function handleBoss(text, channel, env) {
         
         if (name === 'report_management_status') {
           const targetChannel = HNI.knowledge.management_channels[args.category];
-          console.log(`[정보 조회 시작] 채널: ${targetChannel.name}(ID:${targetChannel.id})`);
+          console.log(`[정보 조회 시작] 채널: ${targetChannel.name}`);
           
           const historyRes = await slackApi('conversations.history', { channel: targetChannel.id, limit: 15 }, env.BOT_TOKEN);
           
           if (historyRes.ok && historyRes.messages.length > 0) {
-            const context = historyRes.messages.reverse().map(m => `[발신:${m.user}] ${m.text}`).join('\n\n');
+            // 💡 [v12.0 핵심] User ID를 실명으로 변환하는 로직
+            const userCache = {};
+            const messagesWithNames = await Promise.all(historyRes.messages.reverse().map(async (m) => {
+              if (!m.user) return `[기타] ${m.text}`;
+              
+              // 캐시 및 HNI.members 확인
+              let displayName = Object.keys(HNI.members).find(key => HNI.members[key].id === m.user);
+              if (!displayName && !userCache[m.user]) {
+                const uInfo = await slackApi('users.info', { user: m.user }, env.BOT_TOKEN);
+                if (uInfo.ok) userCache[m.user] = uInfo.user.profile.real_name || uInfo.user.name;
+              }
+              displayName = displayName || userCache[m.user] || m.user;
+              return `[발신:${displayName}] ${m.text}`;
+            }));
+
+            const context = messagesWithNames.join('\n\n');
             const summaryRes = await fetchWithRetry(url, {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({
-                contents: [{ role: 'user', parts: [{ text: text }] }, { role: 'model', parts: [part] }, { role: 'user', parts: [{ text: `채널(#${targetChannel.name})의 최근 내용입니다:\n${context}\n분석하여 보고하세요.` }] }]
+                contents: [{ role: 'user', parts: [{ text: text }] }, { role: 'model', parts: [part] }, { role: 'user', parts: [{ text: `채널(#${targetChannel.name})의 대화 내용(ID 변환 완료)입니다:\n${context}\n\n이 내용을 분석하여 대표님께 보고하세요.` }] }]
               })
             });
             const sData = await summaryRes.json();
             const sReply = sData.candidates?.[0]?.content?.parts?.[0]?.text;
             if (sReply) await slackApi('chat.postMessage', { channel, text: sReply }, env.BOT_TOKEN);
           } else {
-            const errorMsg = historyRes.error === 'not_in_channel' ? `봇이 #${targetChannel.name} 채널에 초대되지 않았습니다. /invite @구대표집사봇 명령어로 초대해 주세요.` : `데이터 오류: ${historyRes.error}`;
-            await slackApi('chat.postMessage', { channel, text: `❓ ${errorMsg}` }, env.BOT_TOKEN);
+            await slackApi('chat.postMessage', { channel, text: `❓ 데이터를 가져오지 못했습니다.` }, env.BOT_TOKEN);
           }
         }
       }
@@ -238,7 +250,7 @@ async function handleMember(senderId, text, channel, env) {
   } catch (e) { console.error(e); }
 }
 
-// ─── [5] 메인 핸들러 (최상위 예외 처리 강화) ──────────────────────
+// ─── [5] 메인 핸들러 ──────────────────────────────────────
 
 export default async function handler(req, res) {
   try {
