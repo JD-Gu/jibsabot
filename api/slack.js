@@ -1,6 +1,6 @@
 import crypto from 'crypto';
 
-// ─── [1] 데이터 및 지식 베이스 (H&I 전 직원 및 기술 정보) ──────────────
+// ─── [1] 데이터 및 지식 베이스 (H&I 마스터 데이터 - 정체성 강화) ──────────
 const HNI = {
   members: {
     '구자덕': { id: 'U02M1T5E1N3', email: 'ceo@hni-gl.com', dept: '경영진', role: '대표이사' },
@@ -21,7 +21,7 @@ const HNI = {
   knowledge: {
     companyName: "주식회사 에이치앤아이 (H&I)",
     ceo: "구자덕 대표이사",
-    botName: "구대표집사봇 (별명: 자두)",
+    botName: "구대표집사봇", // 별명 삭제, 공식 명칭으로 통일
     coreTech: "GNSS/RTK 초정밀 측위(cm급), HI-PPE 지능형 안전 장구(v4.0), AI라이브 플랫폼, 비전 AI 엣지 기술",
     vision: "초정밀 위치 정보를 기반으로 모든 이동의 안전과 지능화를 선도하는 국내 1위 측위 플랫폼 기업",
     management_channels: {
@@ -71,7 +71,6 @@ function verifySlackRequest(req, rawBody, signingSecret) {
   return `v0=${hmac}` === signature;
 }
 
-// 💡 유료 플랜이므로 재시도 대기 시간을 대폭 단축하여 즉각적인 응답 유도
 async function fetchWithRetry(url, options, maxRetries = 2) {
   for (let i = 0; i <= maxRetries; i++) {
     const controller = new AbortController();
@@ -133,9 +132,10 @@ async function getChatContext(channel, token, limit = 10) {
 
 async function handleBoss(text, channel, threadTs, env) {
   const nowKST = new Date().toLocaleString('ko-KR', { timeZone: 'Asia/Seoul' });
-  const systemPrompt = `당신은 ${HNI.knowledge.companyName} 구자덕 대표님의 수석 비서 '자두'입니다.
+  const systemPrompt = `당신은 ${HNI.knowledge.companyName} 구자덕 대표님의 수석 비서 '${HNI.knowledge.botName}'입니다.
   현재 시각: ${nowKST}
-  유료 플랜 적용으로 모든 지시를 즉각적으로, 논리적이고 객관적인 데이터에 근거하여 보고하세요.`;
+  당신은 어떠한 별명도 사용하지 않으며, 오직 '${HNI.knowledge.botName}'이라는 공식 명칭으로 활동합니다.
+  모든 지시는 논리적이고 객관적인 데이터에 근거하여 즉각적으로 보고하세요.`;
 
   const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${env.GEMINI_KEY}`;
 
@@ -187,17 +187,18 @@ async function handleBoss(text, channel, threadTs, env) {
   } catch (e) { console.error("[BOSS ERROR]", e); }
 }
 
-// ─── [4] handleMember: 임직원 응대 (자기소개 정체성 강화) ─────────────────
+// ─── [4] handleMember: 임직원 응대 (공식 정체성 확립) ─────────────────
 
 async function handleMember(senderId, text, channel, threadTs, env) {
   const userRes = await slackApi('users.info', { user: senderId }, env.BOT_TOKEN);
   const name = userRes.user?.profile?.real_name || "임직원";
   
-  const systemPrompt = `당신은 ${HNI.knowledge.companyName}의 공식 AI 비서 '${HNI.knowledge.botName}'(자두)입니다. 
+  const systemPrompt = `당신은 ${HNI.knowledge.companyName}의 공식 AI 비서 '${HNI.knowledge.botName}'입니다. 
   - 정체성: 구자덕 대표님이 임직원들의 업무 효율과 기술 성장을 위해 직접 도입하셨습니다.
   - 전문분야: ${HNI.knowledge.coreTech}에 대해 전문가급 지식을 보유하고 있습니다.
   - 태도: 매우 친절하고 유능하며 싹싹하게 대화하세요. 
-  - 자기소개: "누구세요?"나 정체성을 묻는 질문에는 대표님의 도입 취지와 자신의 전문 분야를 포함하여 멋지게 소개하세요.
+  - 금기사항: '자두'라는 별명을 스스로 언급하지 마세요. 당신의 이름은 오직 '${HNI.knowledge.botName}'입니다.
+  - 자기소개: 자신을 소개할 때 대표님의 도입 취지와 전문 분야를 포함하여 품격 있게 소개하세요.
   - 규칙: 모든 답변 마지막엔 [REPORT_STRENGTH: LOW/HIGH]를 붙이세요.`;
 
   const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${env.GEMINI_KEY}`;
