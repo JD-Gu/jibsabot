@@ -58,6 +58,20 @@ function verifySlackRequest(req, rawBody, signingSecret) {
   return `v0=${hmac}` === signature;
 }
 
+// [공통] 지능적 재시도를 포함한 Fetch 함수 (429 에러 대응)
+async function fetchWithRetry(url, options, maxRetries = 5) {
+  const delays = [1000, 2000, 4000, 8000, 16000];
+  for (let i = 0; i <= maxRetries; i++) {
+    const response = await fetch(url, options);
+    // 429(Quota Exceeded) 혹은 5xx 에러인 경우 재시도
+    if ((response.status === 429 || response.status >= 500) && i < maxRetries) {
+      await new Promise(resolve => setTimeout(resolve, delays[i]));
+      continue;
+    }
+    return response;
+  }
+}
+
 async function slackApi(endpoint, body, token) {
   const isRead = endpoint.includes('.list') || endpoint.includes('.info') || endpoint.includes('.history') || endpoint.includes('search.');
   const method = isRead ? 'GET' : 'POST';
@@ -76,14 +90,13 @@ async function slackApi(endpoint, body, token) {
     options.body = JSON.stringify(body);
   }
 
-  console.log(`[Slack API 호출] ${method} ${endpoint}`);
   try {
-    const r = await fetch(url, options);
+    const r = await fetchWithRetry(url, options);
     const res = await r.json();
     if (!res.ok) console.error(`[Slack API 응답 에러] ${endpoint}: ${res.error}`);
     return res;
   } catch (e) {
-    console.error(`[Slack API 네트워크 에러] ${endpoint}:`, e);
+    console.error(`[Slack API 에러] ${endpoint}:`, e);
     return { ok: false, error: e.message };
   }
 }
@@ -97,7 +110,7 @@ async function findUserIdByName(name, token) {
   return found ? found.id : null;
 }
 
-// ─── [3] handleBoss: 대표님용 (로깅 및 안전설정 강화) ──────────────
+// ─── [3] handleBoss: 대표님용 (안전설정 및 재시도 강화) ────────────
 
 async function handleBoss(text, channel, env) {
   console.log(`[대표님 지시 수신] ${text}`);
@@ -110,7 +123,6 @@ async function handleBoss(text, channel, env) {
     contents: [{ parts: [{ text: text }] }],
     system_instruction: { parts: [{ text: systemPrompt }] },
     tools: GEMINI_TOOLS,
-    // 세이프티 설정 완화 (테스트용)
     safetySettings: [
       { category: "HARM_CATEGORY_HARASSMENT", threshold: "BLOCK_NONE" },
       { category: "HARM_CATEGORY_HATE_SPEECH", threshold: "BLOCK_NONE" },
@@ -120,28 +132,30 @@ async function handleBoss(text, channel, env) {
   };
 
   try {
-    const response = await fetch(url, {
+    const response = await fetchWithRetry(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload)
     });
     
     const data = await response.json();
-    console.log(`[Gemini 응답 상세] ${JSON.stringify(data).slice(0, 500)}`);
 
-    if (data.error) throw new Error(data.error.message);
+    if (data.error) {
+      if (data.error.code === 429) {
+        return await slackApi('chat.postMessage', { channel, text: "⏳ 현재 구글 API 사용량이 일시적으로 초과되었습니다. 잠시 후 다시 시도해 주세요." }, env.BOT_TOKEN);
+      }
+      throw new Error(data.error.message);
+    }
 
     const parts = data.candidates?.[0]?.content?.parts || [];
     
     if (parts.length === 0) {
-      console.warn('[경고] Gemini로부터 받은 유효한 부품(parts)이 없습니다.');
-      await slackApi('chat.postMessage', { channel, text: "🤔 엔진에서 응답을 생성하지 못했습니다. (세이프티 필터 등의 이유일 수 있습니다.)" }, env.BOT_TOKEN);
+      await slackApi('chat.postMessage', { channel, text: "🤔 엔진에서 적절한 답변을 생성하지 못했습니다. 질문을 조금 더 구체적으로 해주세요." }, env.BOT_TOKEN);
       return;
     }
 
     for (const part of parts) {
       if (part.text) {
-        console.log(`[답변 전송] ${part.text}`);
         await slackApi('chat.postMessage', { channel, text: part.text }, env.BOT_TOKEN);
       }
       
@@ -151,17 +165,39 @@ async function handleBoss(text, channel, env) {
           let targetId = HNI.members[args.name]?.id || await findUserIdByName(args.name, env.BOT_TOKEN);
           if (targetId) {
             await slackApi('chat.postMessage', { channel: targetId, text: args.message }, env.BOT_TOKEN);
-            await slackApi('chat.postMessage', { channel, text: `✅ 대표님, ${args.name}님께 전송했습니다.` }, env.BOT_TOKEN);
+            await slackApi('chat.postMessage', { channel, text: `✅ 대표님, ${args.name}님께 메시지를 전송했습니다.` }, env.BOT_TOKEN);
           } else {
             await slackApi('chat.postMessage', { channel, text: `❓ '${args.name}'님을 찾지 못했습니다.` }, env.BOT_TOKEN);
           }
         }
-        // search_financial_status 로직...
+        
+        if (name === 'search_financial_status') {
+          const searchRes = await slackApi('search.messages', { query: args.query, count: 5 }, env.BOT_TOKEN);
+          if (searchRes.ok && searchRes.messages.matches.length > 0) {
+            const context = searchRes.messages.matches.map(m => `[${m.channel.name}] ${m.text}`).join('\n\n');
+            const summaryRes = await fetchWithRetry(url, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                contents: [
+                  { role: 'user', parts: [{ text: text }] },
+                  { role: 'model', parts: [part] },
+                  { role: 'user', parts: [{ text: `검색 결과:\n${context}\n요약 보고해 주세요.` }] }
+                ]
+              })
+            });
+            const sData = await summaryRes.json();
+            const sReply = sData.candidates?.[0]?.content?.parts?.[0]?.text;
+            if (sReply) await slackApi('chat.postMessage', { channel, text: sReply }, env.BOT_TOKEN);
+          } else {
+            await slackApi('chat.postMessage', { channel, text: "❓ 관련 최신 데이터를 슬랙에서 찾지 못했습니다." }, env.BOT_TOKEN);
+          }
+        }
       }
     }
   } catch (e) {
     console.error('[핸들러 에러]', e);
-    await slackApi('chat.postMessage', { channel, text: `⚠️ 자두 엔진 에러: ${e.message}` }, env.BOT_TOKEN);
+    await slackApi('chat.postMessage', { channel, text: `⚠️ 구대표집사봇 엔진 에러: ${e.message}` }, env.BOT_TOKEN);
   }
 }
 
@@ -175,7 +211,7 @@ async function handleMember(senderId, text, channel, env) {
   const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${env.GEMINI_KEY}`;
 
   try {
-    const response = await fetch(url, {
+    const response = await fetchWithRetry(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -188,7 +224,7 @@ async function handleMember(senderId, text, channel, env) {
     if (reply) await slackApi('chat.postMessage', { channel, text: reply }, env.BOT_TOKEN);
 
     if (text.length >= 5) {
-      await slackApi('chat.postMessage', { channel: env.BOSS_ID, text: `💬 [보고] ${name}: ${text}` }, env.BOT_TOKEN);
+      await slackApi('chat.postMessage', { channel: env.BOSS_ID, text: `💬 [보고] ${name}: ${text}\n답변 요약: ${reply ? reply.slice(0, 30) : ""}...` }, env.BOT_TOKEN);
     }
   } catch (e) { console.error(e); }
 }
