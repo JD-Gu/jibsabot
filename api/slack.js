@@ -15,8 +15,6 @@ const HNI = {
     tech: "GNSS/RTK 초정밀 측위(cm급), HI-PPE 임베디드 제어, AI라이브 플랫폼, AI 엣지 비전 기술",
     business: "LG유플러스 독점 파트너, 전국 200개 GNSS 기준국 운영, 자율주행 및 드론 정밀 항법 지원",
     vision: "국내 1위 초정밀 측위 플랫폼 기업 (H&I)",
-    
-    // 💡 구대표님, 실제 채널 ID가 적용되었습니다.
     management_channels: {
       finance: { name: "cmm-cxo", id: "C02M8BMJZG9" }, 
       sales: { name: "cmm-영업지원", id: "C06DRAHHAQZ" }
@@ -111,13 +109,7 @@ async function findUserIdByName(name, token) {
 
 async function handleBoss(text, channel, env) {
   console.log(`[대표님 지시 수신] ${text}`);
-  const systemPrompt = `당신은 주식회사 에이치앤아이(H&I) 구대표님의 전담 비서 '구대표집사봇'입니다. 
-  1. 경영현황 질문 시 다음 채널을 타격하세요:
-     - 재무현황(#cmm-cxo): category='finance'
-     - 영업현황(#cmm-영업지원): category='sales'
-  2. 정보를 가져온 후에는 가독성 있게 요약하여 보고하세요.
-  3. 모든 답변은 대표님께 결론부터 정중하고 명확하게 말씀드리세요.`;
-
+  const systemPrompt = `당신은 주식회사 에이치앤아이(H&I) 구대표님의 전담 비서 '구대표집사봇'입니다. 싹싹하고 명확하게 보고하세요.`;
   const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${env.GEMINI_KEY}`;
 
   try {
@@ -133,7 +125,7 @@ async function handleBoss(text, channel, env) {
     
     const data = await response.json();
     if (data.error && data.error.code === 429) {
-      return await slackApi('chat.postMessage', { channel, text: "⏳ 구대표님, 죄송합니다. 현재 엔진 사용량이 일시적으로 소진되었습니다. 1~2분 후 다시 시도해 주세요." }, env.BOT_TOKEN);
+      return await slackApi('chat.postMessage', { channel, text: "⏳ 구대표님, 현재 엔진 할당량이 소진되었습니다. 1분 후 다시 시도해 주세요." }, env.BOT_TOKEN);
     }
 
     const parts = data.candidates?.[0]?.content?.parts || [];
@@ -148,14 +140,12 @@ async function handleBoss(text, channel, env) {
           let targetId = HNI.members[args.name]?.id || await findUserIdByName(args.name, env.BOT_TOKEN);
           if (targetId) {
             await slackApi('chat.postMessage', { channel: targetId, text: args.message }, env.BOT_TOKEN);
-            await slackApi('chat.postMessage', { channel, text: `✅ 대표님, ${args.name}님께 메시지를 전달했습니다:\n> ${args.message}` }, env.BOT_TOKEN);
+            await slackApi('chat.postMessage', { channel, text: `✅ 대표님, ${args.name}님께 다음 내용을 전달했습니다:\n> ${args.message}` }, env.BOT_TOKEN);
           }
         }
         
         if (name === 'report_management_status') {
           const targetChannel = HNI.knowledge.management_channels[args.category];
-          console.log(`[경영 정보 조회 시작] 채널: ${targetChannel.name}(ID:${targetChannel.id})`);
-          
           const historyRes = await slackApi('conversations.history', { channel: targetChannel.id, limit: 15 }, env.BOT_TOKEN);
           
           if (historyRes.ok && historyRes.messages.length > 0) {
@@ -164,18 +154,87 @@ async function handleBoss(text, channel, env) {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({
-                contents: [{ role: 'user', parts: [{ text: text }] }, { role: 'model', parts: [part] }, { role: 'user', parts: [{ text: `채널(#${targetChannel.name})의 최근 대화 이력입니다:\n${context}\n\n이 내용을 분석하여 대표님이 원하시는 경영현황 요약 보고서를 작성하세요.` }] }]
+                contents: [{ role: 'user', parts: [{ text: text }] }, { role: 'model', parts: [part] }, { role: 'user', parts: [{ text: `채널(#${targetChannel.name})의 최근 이력입니다:\n${context}\n분석하여 요약 보고하세요.` }] }]
               })
             });
             const sData = await summaryRes.json();
             const sReply = sData.candidates?.[0]?.content?.parts?.[0]?.text;
             if (sReply) await slackApi('chat.postMessage', { channel, text: sReply }, env.BOT_TOKEN);
           } else {
-            const errorMsg = historyRes.error === 'not_in_channel' ? `봇이 #${targetChannel.name} 채널에 초대되지 않았습니다. /invite @구대표집사봇 명령어로 초대해 주세요.` : `정보를 가져오지 못했습니다 (${historyRes.error}). 채널 권한을 확인해 주세요.`;
+            const errorMsg = historyRes.error === 'not_in_channel' ? `봇을 #${targetChannel.name} 채널에 초대해주세요.` : `데이터 오류: ${historyRes.error}`;
             await slackApi('chat.postMessage', { channel, text: `❓ ${errorMsg}` }, env.BOT_TOKEN);
           }
         }
       }
     }
   } catch (e) {
-    await slackApi('chat.postMessage', { channel, text: `⚠️ 응답 지연 발생. 잠시 후 다시 지시해 주세요.` }, env.BOT_TOKEN);
+    console.error('[핸들러 에러]', e);
+    await slackApi('chat.postMessage', { channel, text: `⚠️ 응답 중 오류가 발생했습니다. 잠시 후 다시 지시해주세요.` }, env.BOT_TOKEN);
+  }
+}
+
+// ─── [4] handleMember: 직원용 ──────────────────────────────────
+
+async function handleMember(senderId, text, channel, env) {
+  const userRes = await slackApi('users.info', { user: senderId }, env.BOT_TOKEN);
+  const name = userRes.user?.profile?.real_name || "직원";
+  const systemPrompt = `당신은 에이치앤아이(H&I)의 AI 집사 '구대표집사봇'입니다. 친절히 대화하고 답변 마지막에 "[REPORT_STRENGTH: LOW/HIGH]"를 붙이세요.`;
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${env.GEMINI_KEY}`;
+
+  try {
+    const response = await fetchWithRetry(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ contents: [{ parts: [{ text: text }] }], system_instruction: { parts: [{ text: systemPrompt }] } })
+    });
+    const data = await response.json();
+    let reply = data.candidates?.[0]?.content?.parts?.[0]?.text || "";
+    const isHigh = reply.includes('REPORT_STRENGTH: HIGH');
+    reply = reply.replace(/\[REPORT_STRENGTH: (LOW|HIGH)\]/g, "").trim();
+    if (reply) await slackApi('chat.postMessage', { channel, text: reply }, env.BOT_TOKEN);
+    if (isHigh) {
+      await slackApi('chat.postMessage', { channel: env.BOSS_ID, text: `🔔 *[중요 직원 대화 보고]*\n발신자: ${name}\n내용: ${text}` }, env.BOT_TOKEN);
+    }
+  } catch (e) { console.error(e); }
+}
+
+// ─── [5] 메인 핸들러 (최상위 예외 처리 강화) ──────────────────────
+
+export default async function handler(req, res) {
+  try {
+    if (req.method !== 'POST') return res.status(405).end();
+    const chunks = [];
+    for await (const chunk of req) chunks.push(chunk);
+    const rawBody = Buffer.concat(chunks).toString('utf8');
+    
+    const env = { 
+      BOT_TOKEN: process.env.SLACK_BOT_TOKEN, 
+      BOSS_ID: process.env.BOSS_USER_ID, 
+      GEMINI_KEY: process.env.GEMINI_API_KEY, 
+      SIGNING_SECRET: process.env.SLACK_SIGNING_SECRET 
+    };
+
+    if (!verifySlackRequest(req, rawBody, env.SIGNING_SECRET)) return res.status(401).end();
+    if (req.headers['x-slack-retry-num']) return res.status(200).send('ok');
+    
+    let body;
+    try { body = JSON.parse(rawBody); } catch (e) { return res.status(200).end(); }
+    if (body.type === 'url_verification') return res.status(200).json({ challenge: body.challenge });
+    
+    const event = body.event;
+    if (!event || event.bot_id || !event.text) return res.status(200).end();
+    
+    if (event.user === env.BOSS_ID) {
+      await handleBoss(event.text.trim(), event.channel, env);
+    } else {
+      await handleMember(event.user, event.text.trim(), event.channel, env);
+    }
+    
+    return res.status(200).send('ok');
+  } catch (globalError) {
+    console.error('[CRITICAL RUNTIME ERROR]', globalError);
+    return res.status(200).send('error handled');
+  }
+}
+
+export const config = { api: { bodyParser: false } };
