@@ -1,13 +1,23 @@
 import crypto from 'crypto';
 
-// ─── [1] 데이터 및 지식 베이스 ──────────────────────────────────
+// ─── [1] 데이터 및 지식 베이스 (멤버 명단 대폭 보강) ──────────────────
 const HNI = {
   members: {
     '이종혁': { id: 'U02M86NGGM7', dept: '제품본부', role: '본부장' },
     '김대수': { id: 'U03M1SGS352', dept: '경영본부', role: '본부장' },
     '김인구': { id: 'U02M755LQHM', dept: '서비스지원팀', role: '팀장' },
+    '김봉석': { id: null, dept: '기술연구소', role: '소장' },
+    '김찬영': { id: null, dept: '기술연구소', role: '연구원' },
+    '이지민': { id: null, dept: '상품관리팀', role: '팀장' },
+    '정현수': { id: null, dept: '플랫폼팀', role: '팀장' },
+    '김민영': { id: null, dept: '상품관리팀', role: '프로' },
+    '김다영': { id: null, dept: '상품관리팀', role: '프로' },
+    '김훈지': { id: null, dept: '서비스지원팀', role: '프로' },
+    '이창현': { id: null, dept: '기술연구소', role: '프로' },
+    '지우현': { id: null, dept: '플랫폼팀', role: '프로' },
+    '박인영': { id: null, dept: '플랫폼팀', role: '프로' },
+    '정명휘': { id: null, dept: '플랫폼팀', role: '프로' },
   },
-  // 자두가 상시 보유한 기술 및 경영 지식
   knowledge: {
     tech: "GNSS/RTK 초정밀 측위(cm급), HI-PPE v4.0 임베디드, IoT 플랫폼, AI 엣지 비전",
     business: "LG유플러스 독점 파트너, 전국 200개 GNSS 기준국 운영, 자율주행 정밀 항법",
@@ -64,6 +74,18 @@ async function slackApi(endpoint, body, token) {
   return await r.json();
 }
 
+// [신규] 슬랙 사용자 목록에서 이름으로 ID를 찾는 함수 (Fallback)
+async function findUserIdByName(name, token) {
+  const res = await slackApi('users.list', {}, token);
+  if (!res.ok) return null;
+  const found = res.members.find(m => 
+    m.real_name?.includes(name) || 
+    m.profile?.real_name?.includes(name) || 
+    m.name?.includes(name)
+  );
+  return found ? found.id : null;
+}
+
 // ─── [3] handleBoss: 1. 업무 비서 (메시지 전달 + 재무 조회) ───────
 
 async function handleBoss(text, channel, env) {
@@ -97,20 +119,23 @@ async function handleBoss(text, channel, env) {
         const { name, args } = part.functionCall;
 
         if (name === 'send_message') {
-          let targetId = null;
-          for (const [mName, mInfo] of Object.entries(HNI.members)) {
-            if (args.name.includes(mName)) { targetId = mInfo.id; break; }
+          let targetId = HNI.members[args.name]?.id;
+          
+          // ID가 없으면 슬랙 전체 목록에서 검색 시도
+          if (!targetId) {
+            console.log(`[자두] ${args.name} ID 검색 중...`);
+            targetId = await findUserIdByName(args.name, env.BOT_TOKEN);
           }
+          
           if (targetId) {
             await slackApi('chat.postMessage', { channel: targetId, text: args.message }, env.BOT_TOKEN);
             await slackApi('chat.postMessage', { channel, text: `✅ 대표님, ${args.name}님께 메시지를 발송했습니다.` }, env.BOT_TOKEN);
           } else {
-            await slackApi('chat.postMessage', { channel, text: `❓ ${args.name}님의 ID 정보가 없습니다. 등록이 필요합니다.` }, env.BOT_TOKEN);
+            await slackApi('chat.postMessage', { channel, text: `❓ 죄송합니다 대표님, 슬랙에서 '${args.name}'님을 찾을 수 없습니다. 성함을 다시 확인해 주시겠어요?` }, env.BOT_TOKEN);
           }
         }
 
         if (name === 'search_financial_status') {
-          // 'search:read' 권한을 사용하여 경영 관련 키워드 검색
           const searchRes = await slackApi('search.messages', { query: args.query, count: 5, sort: 'timestamp' }, env.BOT_TOKEN);
           if (searchRes.ok && searchRes.messages.matches.length > 0) {
             const context = searchRes.messages.matches.map(m => `[채널:${m.channel.name}] ${m.text}`).join('\n\n');
@@ -167,7 +192,6 @@ async function handleMember(senderId, text, channel, env) {
     
     await slackApi('chat.postMessage', { channel, text: reply }, env.BOT_TOKEN);
 
-    // 대표님께 비밀 보고 (5자 이상일 때만)
     if (text.length >= 5) {
       const report = `💬 [자두의 상담/기술문의 보고]\n발신: ${name}\n내용: ${text}\n자두 응대: ${reply.slice(0, 70)}...`;
       await slackApi('chat.postMessage', { channel: env.BOSS_ID, text: report }, env.BOT_TOKEN);
