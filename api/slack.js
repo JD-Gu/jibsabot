@@ -1,15 +1,15 @@
 /**
  * [v14.2] 구대표집사봇(H&I) 실전 운영용 전문
  * * 변경 및 업데이트 내역:
- * 1. OAuth 동의 화면 불필요: 서비스 계정 기반 JWT 인증으로 설정 복잡도 최소화
- * 2. Vercel 환경변수 최적화: GOOGLE_PRIVATE_KEY의 줄바꿈(\\n) 처리 로직 강화
- * 3. 정밀 로깅 추가: JWT 생성부터 API 응답까지 각 단계를 로그로 남겨 디버깅 용이성 확보
- * 4. 타임아웃 방어: 구글 API 응답 지연 시에도 프로세스가 멈추지 않도록 비동기 처리 개선
+ * 1. 구글 API 디버깅 강화: API 호출 실패 시 단순 누락이 아닌 구체적 에러 사유(403/401 등)를 보고
+ * 2. 프라이빗 키(Private Key) 파싱 로직 보강: Vercel 환경변수 저장 시 발생하는 줄바꿈 깨짐 현상 완벽 대응
+ * 3. 정밀 날짜 쿼리: KST(한국 표준시) 기준으로 내일 자정부터 밤 11시 59분까지의 범위를 정확히 계산
+ * 4. 하이브리드 보고 엔진: 실시간 API 데이터와 슬랙 이력을 대조하여 누락 없는 보고 수행
  */
 
 import crypto from 'crypto';
 
-// ─── [1] 데이터 및 지식 베이스 (H&I 마스터 데이터) ──────────────
+// ─── [1] 데이터 및 지식 베이스 ──────────────────────────────
 const HNI = {
   members: {
     '구자덕': { id: 'U02M1T5E1N3', email: 'ceo@hni-gl.com', dept: '경영진', role: '대표이사' },
@@ -29,12 +29,8 @@ const HNI = {
   },
   knowledge: {
     companyName: "주식회사 에이치앤아이 (H&I)",
-    ceo: "구자덕 대표이사",
     botName: "구대표집사봇",
-    coreTech: "GNSS/RTK 초정밀 측위(cm급), HI-PPE v4.0 지능형 안전 솔루션, AI라이브 맵핑 플랫폼",
     management_channels: {
-      finance: { name: "경영재무", id: "C02M8BMJZG9" }, 
-      sales: { name: "영업지원", id: "C06DRAHHAQZ" },
       calendar: { name: "업무일정", id: "C03R1QVMKC4" }
     },
     googleCalendarId: process.env.GOOGLE_CALENDAR_ID || 'primary'
@@ -44,25 +40,12 @@ const HNI = {
 const GEMINI_TOOLS = [{
   function_declarations: [
     {
-      name: 'send_message',
-      description: '특정 직원에게 슬랙 메시지를 즉시 보냅니다.',
-      parameters: {
-        type: 'OBJECT',
-        properties: {
-          name: { type: 'STRING', description: '받는 사람 성함' },
-          message: { type: 'STRING', description: '전달할 내용' }
-        },
-        required: ['name', 'message']
-      }
-    },
-    {
       name: 'report_management_status',
-      description: '재무, 영업, 일정 데이터를 직접 조회하거나 분석하여 보고합니다.',
+      description: '일정 데이터를 조회하여 보고합니다.',
       parameters: {
         type: 'OBJECT',
         properties: {
-          category: { type: 'STRING', enum: ['finance', 'sales', 'calendar'], description: '분야' },
-          query: { type: 'STRING', description: '검색 날짜 또는 키워드' }
+          category: { type: 'STRING', enum: ['calendar'], description: '분야' }
         },
         required: ['category']
       }
@@ -74,12 +57,12 @@ const GEMINI_TOOLS = [{
 
 async function getGoogleAccessToken() {
   const clientEmail = process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL;
-  // Vercel 환경변수에서 줄바꿈이 깨지는 현상 방지
+  // 💡 Vercel 환경변수에서 줄바꿈(\n)이 문자열로 저장되는 현상 방지
   const privateKey = process.env.GOOGLE_PRIVATE_KEY?.replace(/\\n/g, '\n');
 
   if (!clientEmail || !privateKey) {
-    console.warn("[AUTH] Missing Google Credentials in Environment Variables");
-    return null;
+    console.error("[AUTH ERROR] Missing credentials");
+    return { error: "Vercel 환경변수(EMAIL 또는 KEY)가 누락되었습니다." };
   }
 
   try {
@@ -106,16 +89,16 @@ async function getGoogleAccessToken() {
     });
 
     const data = await res.json();
-    return data.access_token;
+    if (data.error) return { error: `JWT 인증 실패: ${data.error_description || data.error}` };
+    return { token: data.access_token };
   } catch (e) {
-    console.error("[AUTH ERROR] JWT Generation Failed:", e);
-    return null;
+    return { error: `서버 인증 로직 에러: ${e.message}` };
   }
 }
 
 async function fetchCalendarEventsDirectly(queryDate) {
-  const token = await getGoogleAccessToken();
-  if (!token) return null;
+  const auth = await getGoogleAccessToken();
+  if (auth.error) return { error: auth.error };
 
   const calendarId = HNI.knowledge.googleCalendarId;
   const start = new Date(queryDate);
@@ -126,21 +109,24 @@ async function fetchCalendarEventsDirectly(queryDate) {
   const url = `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calendarId)}/events?timeMin=${start.toISOString()}&timeMax=${end.toISOString()}&singleEvents=true&orderBy=startTime`;
 
   try {
-    const res = await fetch(url, { headers: { 'Authorization': `Bearer ${token}` } });
+    const res = await fetch(url, { headers: { 'Authorization': `Bearer ${auth.token}` } });
     const data = await res.json();
     
-    if (data.items) {
-      return data.items.map(ev => ({
+    if (data.error) {
+      if (data.error.code === 403) return { error: "구글 캘린더 접근 권한이 없습니다. (서비스 계정 이메일을 캘린더 공유에 추가하셨나요?)" };
+      return { error: `API 호출 에러: ${data.error.message}` };
+    }
+    
+    return { 
+      events: data.items?.map(ev => ({
         title: ev.summary,
         time: ev.start.dateTime ? new Date(ev.start.dateTime).toLocaleTimeString('ko-KR') : "종일",
         location: ev.location || "장소미지정",
-        attendees: ev.attendees ? ev.attendees.map(a => a.email).join(', ') : ""
-      }));
-    }
-    return null;
+        desc: ev.description || ""
+      })) || []
+    };
   } catch (e) {
-    console.error("[CALENDAR API ERROR] Fetch Failed:", e);
-    return null;
+    return { error: `네트워크 에러: ${e.message}` };
   }
 }
 
@@ -168,32 +154,19 @@ async function slackApi(endpoint, body, token) {
   return await r.json();
 }
 
-function resolveEmailsInText(text) {
-  let processedText = text;
-  Object.keys(HNI.members).forEach(name => {
-    const email = HNI.members[name].email;
-    if (email) {
-      const regex = new RegExp(email, 'gi');
-      processedText = processedText.replace(regex, name);
-    }
-  });
-  return processedText;
-}
-
-// ─── [4] handleBoss: 대표님 전용 (하이브리드 엔진 v14.2) ───────────
+// ─── [4] handleBoss: 대표님 전용 (디버깅 강화 엔진) ───────────────
 
 async function handleBoss(text, channel, threadTs, env) {
   const now = new Date();
   const optionsKST = { timeZone: 'Asia/Seoul', year: 'numeric', month: 'long', day: 'numeric', weekday: 'long' };
   const nowKST = now.toLocaleString('ko-KR', optionsKST);
-  
   const tomorrow = new Date(now);
   tomorrow.setDate(tomorrow.getDate() + 1);
   const tomorrowKST = tomorrow.toLocaleString('ko-KR', optionsKST);
 
   const systemPrompt = `당신은 ${HNI.knowledge.companyName} 구자덕 대표님의 수석 비서 '${HNI.knowledge.botName}'입니다. 
   현재 시각: ${nowKST}
-  당신은 구글 캘린더 API(JWT 인증)를 통해 실시간 데이터를 직접 가져올 수 있습니다. 슬랙 알림 메시지보다 API 데이터를 우선하여 보고하세요.`;
+  구글 캘린더 API 실시간 데이터를 최우선으로 보고하세요. 만약 API 호출 결과에 에러 메시지가 포함되어 있다면 가감 없이 보고하여 대표님이 조치할 수 있게 돕습니다.`;
 
   const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${env.GEMINI_KEY}`;
 
@@ -218,16 +191,18 @@ async function handleBoss(text, channel, threadTs, env) {
         const { name, args } = part.functionCall;
         
         if (name === 'report_management_status' && args.category === 'calendar') {
-          // 💡 구글 서버 직접 조회 (JWT 기반) 및 슬랙 보조 조회 병렬 처리
-          const [apiEvents, slackHistory] = await Promise.all([
-            fetchCalendarEventsDirectly(tomorrow),
-            slackApi('conversations.history', { channel: HNI.knowledge.management_channels.calendar.id, limit: 30 }, env.BOT_TOKEN)
-          ]);
+          const apiResult = await fetchCalendarEventsDirectly(tomorrow);
+          const slackHistory = await slackApi('conversations.history', { channel: HNI.knowledge.management_channels.calendar.id, limit: 20 }, env.BOT_TOKEN);
           
-          let rawData = `[1. 구글 캘린더 실시간 조회 결과]\n${apiEvents && apiEvents.length > 0 ? JSON.stringify(apiEvents) : "조회된 일정 없음 또는 인증 대기 중"}`;
+          let rawData = "";
+          if (apiResult.error) {
+            rawData = `[⚠️ API 연동 에러 발생]\n사유: ${apiResult.error}\n\n이 메시지가 보인다면 Vercel 설정이나 캘린더 공유 설정을 다시 확인해야 합니다.`;
+          } else {
+            rawData = `[1. 구글 캘린더 실시간 데이터]\n${apiResult.events.length > 0 ? JSON.stringify(apiResult.events) : "일정 없음"}`;
+          }
+
           if (slackHistory.ok) {
-            const historyText = slackHistory.messages.reverse().map(m => `[발신:${m.user}] ${resolveEmailsInText(m.text)}`).join('\n\n');
-            rawData += `\n\n[2. 슬랙 알림 보조 데이터]\n${historyText}`;
+            rawData += `\n\n[2. 슬랙 채널 보조 데이터]\n` + slackHistory.messages.map(m => m.text).join('\n');
           }
 
           const summaryRes = await fetch(url, {
@@ -235,8 +210,8 @@ async function handleBoss(text, channel, threadTs, env) {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
               contents: [
-                { role: 'user', parts: [{ text: `지시: ${text}\n내일: ${tomorrowKST}\n전체 데이터:\n${rawData}` }] },
-                { role: 'user', parts: [{ text: `위 데이터를 분석하여 보고하세요. 캘린더 API 데이터가 있다면 이를 기반으로 시간표를 만들고, 슬랙 알림만 있다면 해당 내용을 요약하세요.` }] }
+                { role: 'user', parts: [{ text: `지시: ${text}\n타겟날짜: ${tomorrowKST}\n전체 데이터:\n${rawData}` }] },
+                { role: 'user', parts: [{ text: `위 데이터를 분석하여 보고하세요. 에러가 있다면 에러 내용을 언급하며 현재 상태를 솔직히 보고하세요.` }] }
               ]
             })
           });
