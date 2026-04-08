@@ -58,17 +58,30 @@ function verifySlackRequest(req, rawBody, signingSecret) {
   return `v0=${hmac}` === signature;
 }
 
-// [공통] 지능적 재시도를 포함한 Fetch 함수 (429 에러 대응)
-async function fetchWithRetry(url, options, maxRetries = 5) {
-  const delays = [1000, 2000, 4000, 8000, 16000];
+// [Vercel 타임아웃 최적화] 재시도 간격 단축 및 총 시간 제한
+async function fetchWithRetry(url, options, maxRetries = 4) {
+  const delays = [500, 1000, 2000, 4000]; // 0.5s ~ 4s 로 단축 (총 7.5s 대기)
+  
   for (let i = 0; i <= maxRetries; i++) {
-    const response = await fetch(url, options);
-    // 429(Quota Exceeded) 혹은 5xx 에러인 경우 재시도
-    if ((response.status === 429 || response.status >= 500) && i < maxRetries) {
+    const controller = new AbortController();
+    const id = setTimeout(() => controller.abort(), 15000); // 각 요청당 최대 15초 제한
+    
+    try {
+      const response = await fetch(url, { ...options, signal: controller.signal });
+      clearTimeout(id);
+      
+      if (response.status === 429 || response.status >= 500) {
+        if (i < maxRetries) {
+          await new Promise(resolve => setTimeout(resolve, delays[i]));
+          continue;
+        }
+      }
+      return response;
+    } catch (e) {
+      clearTimeout(id);
+      if (i === maxRetries) throw e;
       await new Promise(resolve => setTimeout(resolve, delays[i]));
-      continue;
     }
-    return response;
   }
 }
 
@@ -110,11 +123,12 @@ async function findUserIdByName(name, token) {
   return found ? found.id : null;
 }
 
-// ─── [3] handleBoss: 대표님용 (안전설정 및 재시도 강화) ────────────
+// ─── [3] handleBoss: 대표님용 ───────────────────────────────────
 
 async function handleBoss(text, channel, env) {
   console.log(`[대표님 지시 수신] ${text}`);
-  const systemPrompt = `당신은 에이치앤아이(H&I) 구자덕 대표님의 유능한 비서 '구대표집사봇'입니다. 싹싹하고 명료하게 보고하세요.`;
+  const systemPrompt = `당신은 에이치앤아이(H&I) 구자덕 대표님의 유능한 비서 '구대표집사봇'입니다. 
+  간결하고 명확하게 답변하세요. 도구 실행이 필요하면 즉시 실행하세요.`;
 
   const modelPath = "models/gemini-2.5-flash";
   const url = `https://generativelanguage.googleapis.com/v1beta/${modelPath}:generateContent?key=${env.GEMINI_KEY}`;
@@ -142,7 +156,7 @@ async function handleBoss(text, channel, env) {
 
     if (data.error) {
       if (data.error.code === 429) {
-        return await slackApi('chat.postMessage', { channel, text: "⏳ 현재 구글 API 사용량이 일시적으로 초과되었습니다. 잠시 후 다시 시도해 주세요." }, env.BOT_TOKEN);
+        return await slackApi('chat.postMessage', { channel, text: "⏳ 구글 엔진 사용량이 많아 답변이 지연되고 있습니다. 10초 후 다시 시도해 주세요." }, env.BOT_TOKEN);
       }
       throw new Error(data.error.message);
     }
@@ -150,7 +164,7 @@ async function handleBoss(text, channel, env) {
     const parts = data.candidates?.[0]?.content?.parts || [];
     
     if (parts.length === 0) {
-      await slackApi('chat.postMessage', { channel, text: "🤔 엔진에서 적절한 답변을 생성하지 못했습니다. 질문을 조금 더 구체적으로 해주세요." }, env.BOT_TOKEN);
+      await slackApi('chat.postMessage', { channel, text: "🤔 엔진에서 답변을 생성하지 못했습니다. 다시 말씀해 주시겠어요?" }, env.BOT_TOKEN);
       return;
     }
 
@@ -182,7 +196,7 @@ async function handleBoss(text, channel, env) {
                 contents: [
                   { role: 'user', parts: [{ text: text }] },
                   { role: 'model', parts: [part] },
-                  { role: 'user', parts: [{ text: `검색 결과:\n${context}\n요약 보고해 주세요.` }] }
+                  { role: 'user', parts: [{ text: `검색 결과:\n${context}\n위 내용을 대표님께 요약 보고해 주세요.` }] }
                 ]
               })
             });
@@ -190,14 +204,14 @@ async function handleBoss(text, channel, env) {
             const sReply = sData.candidates?.[0]?.content?.parts?.[0]?.text;
             if (sReply) await slackApi('chat.postMessage', { channel, text: sReply }, env.BOT_TOKEN);
           } else {
-            await slackApi('chat.postMessage', { channel, text: "❓ 관련 최신 데이터를 슬랙에서 찾지 못했습니다." }, env.BOT_TOKEN);
+            await slackApi('chat.postMessage', { channel, text: "❓ 관련 경영 데이터를 찾지 못했습니다." }, env.BOT_TOKEN);
           }
         }
       }
     }
   } catch (e) {
     console.error('[핸들러 에러]', e);
-    await slackApi('chat.postMessage', { channel, text: `⚠️ 구대표집사봇 엔진 에러: ${e.message}` }, env.BOT_TOKEN);
+    await slackApi('chat.postMessage', { channel, text: `⚠️ 구대표집사봇 응답 지연 (Vercel Timeout 방지). 잠시 후 다시 시도해 주세요.` }, env.BOT_TOKEN);
   }
 }
 
@@ -245,6 +259,8 @@ export default async function handler(req, res) {
   };
 
   if (!verifySlackRequest(req, rawBody, env.SIGNING_SECRET)) return res.status(401).end();
+  
+  // 슬랙 재시도 방지 (재시도가 들어오면 이미 작업 중이거나 끝났다는 뜻이므로 200 반환)
   if (req.headers['x-slack-retry-num']) return res.status(200).send('ok');
 
   let body;
@@ -254,6 +270,8 @@ export default async function handler(req, res) {
   const event = body.event;
   if (!event || event.bot_id || !event.text) return res.status(200).end();
 
+  // 비동기 실행을 위해 제어권을 handle 함수로 넘기고 즉시 200 OK를 보낼 수도 있으나,
+  // Vercel 인스턴스가 즉시 종료될 수 있으므로 await를 유지하되 전체 실행 시간을 25초 내외로 관리합니다.
   if (event.user === env.BOSS_ID) {
     await handleBoss(event.text.trim(), event.channel, env);
   } else {
