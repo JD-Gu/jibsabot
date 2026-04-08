@@ -12,7 +12,7 @@ const HNI = {
     '정현수': { id: null, dept: '플랫폼팀', role: '팀장' },
   },
   knowledge: {
-    tech: "GNSS/RTK 초정밀 측위(cm급), HI-PPE 임베디드 제어, AI라이브 플랫폼 연동, AI 엣지 비전 기술",
+    tech: "GNSS/RTK 초정밀 측위(cm급), HI-PPE 임베디드 제어, AI라이브 플랫폼, AI 엣지 비전 기술",
     business: "LG유플러스 독점 파트너, 전국 200개 GNSS 기준국 운영, 자율주행 및 드론 정밀 항법 지원",
     vision: "국내 1위 초정밀 측위 플랫폼 기업 (H&I)"
   }
@@ -58,16 +58,18 @@ function verifySlackRequest(req, rawBody, signingSecret) {
   return `v0=${hmac}` === signature;
 }
 
+// [Vercel 타임아웃 최적화] 대표님의 지시는 끝까지 시도
 async function fetchWithRetry(url, options, maxRetries = 3) {
-  const delays = [800, 2000, 5000];
+  const delays = [1000, 2500, 6000]; // 재시도 간격 조정
   for (let i = 0; i <= maxRetries; i++) {
     const controller = new AbortController();
-    const id = setTimeout(() => controller.abort(), 12000);
+    const id = setTimeout(() => controller.abort(), 15000); 
     try {
       const response = await fetch(url, { ...options, signal: controller.signal });
       clearTimeout(id);
-      if ((response.status === 429 || response.status >= 500) && i < maxRetries) {
-        console.log(`[재시도 ${i+1}] ${delays[i]}ms 대기 중...`);
+      
+      if (response.status === 429 && i < maxRetries) {
+        console.log(`[할당량 제한] ${delays[i]}ms 대기 후 재시도 중... (${i+1}/${maxRetries})`);
         await new Promise(resolve => setTimeout(resolve, delays[i]));
         continue;
       }
@@ -105,11 +107,15 @@ async function findUserIdByName(name, token) {
   return found ? found.id : null;
 }
 
-// ─── [3] handleBoss: 대표님용 ───────────────────────────────────
+// ─── [3] handleBoss: 대표님용 (반드시 회신 보장 로직) ───────────
 
 async function handleBoss(text, channel, env) {
   console.log(`[대표님 지시 수신] ${text}`);
-  const systemPrompt = `당신은 에이치앤아이(H&I) 구자덕 대표님의 유능한 비서 '구대표집사봇'입니다. 싹싹하고 간결하게 보고하세요.`;
+  const systemPrompt = `당신은 에이치앤아이(H&I) 구자덕 대표님의 전담 비서 '구대표집사봇'입니다. 
+  1. 대표님의 질문에는 예외 없이 상세하고 명확하게 회신해야 합니다.
+  2. 도구(메시지 전송, 경영 검색)가 필요하면 즉시 실행하세요.
+  3. 현재 엔진이 바쁘더라도 최선을 다해 답변을 도출하세요.`;
+
   const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${env.GEMINI_KEY}`;
 
   try {
@@ -122,17 +128,20 @@ async function handleBoss(text, channel, env) {
         tools: GEMINI_TOOLS
       })
     });
-    const data = await response.json();
     
+    const data = await response.json();
+
+    // 할당량 초과 시 대표님께 상황을 상세히 보고
     if (data.error && data.error.code === 429) {
-      return await slackApi('chat.postMessage', { channel, text: "⏳ 구글 엔진 할당량이 초과되었습니다. 잠시 후 다시 말씀해 주세요." }, env.BOT_TOKEN);
+      console.error("[할당량 고갈] 대표님께 지연 보고 전송");
+      return await slackApi('chat.postMessage', { channel, text: "⏳ 구대표님, 죄송합니다. 현재 엔진 할당량이 일시적으로 소진되어 답변이 약 1분 정도 지연될 수 있습니다. 잠시 후 다시 한 번만 말씀해 주시면 즉시 회신드리겠습니다." }, env.BOT_TOKEN);
     }
 
     const parts = data.candidates?.[0]?.content?.parts || [];
 
     for (const part of parts) {
       if (part.text) {
-        console.log(`[텍스트 답변] ${part.text}`);
+        console.log(`[회신 확정] ${part.text}`);
         await slackApi('chat.postMessage', { channel, text: part.text }, env.BOT_TOKEN);
       }
       
@@ -141,11 +150,11 @@ async function handleBoss(text, channel, env) {
         if (name === 'send_message') {
           let targetId = HNI.members[args.name]?.id || await findUserIdByName(args.name, env.BOT_TOKEN);
           if (targetId) {
-            console.log(`[발송 확정] 대상: ${args.name}, 내용: ${args.message}`);
+            console.log(`[업무 수행] 대상: ${args.name}, 내용: ${args.message}`);
             await slackApi('chat.postMessage', { channel: targetId, text: args.message }, env.BOT_TOKEN);
-            await slackApi('chat.postMessage', { channel, text: `✅ 대표님, ${args.name}님께 메시지를 전송했습니다.` }, env.BOT_TOKEN);
+            await slackApi('chat.postMessage', { channel, text: `✅ 대표님, 말씀하신 대로 ${args.name}님께 메시지를 전달했습니다.` }, env.BOT_TOKEN);
           } else {
-            await slackApi('chat.postMessage', { channel, text: `❓ '${args.name}'님을 찾지 못했습니다.` }, env.BOT_TOKEN);
+            await slackApi('chat.postMessage', { channel, text: `❓ 대표님, '${args.name}'님을 슬랙 명단에서 찾지 못했습니다. 성함을 다시 확인해 주시겠습니까?` }, env.BOT_TOKEN);
           }
         }
         
@@ -157,7 +166,7 @@ async function handleBoss(text, channel, env) {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({
-                contents: [{ role: 'user', parts: [{ text: text }] }, { role: 'model', parts: [part] }, { role: 'user', parts: [{ text: `검색 결과:\n${context}\n위 내용을 요약 보고하세요.` }] }]
+                contents: [{ role: 'user', parts: [{ text: text }] }, { role: 'model', parts: [part] }, { role: 'user', parts: [{ text: `검색된 결과입니다:\n${context}\n\n위 내용을 분석해서 보고하세요.` }] }]
               })
             });
             const sData = await summaryRes.json();
@@ -167,26 +176,21 @@ async function handleBoss(text, channel, env) {
         }
       }
     }
-  } catch (e) { 
-    console.error('[에러]', e); 
-    await slackApi('chat.postMessage', { channel, text: `⚠️ 구대표집사봇 지연 발생: ${e.message}` }, env.BOT_TOKEN);
+  } catch (e) {
+    console.error('[핸들러 에러]', e);
+    await slackApi('chat.postMessage', { channel, text: `⚠️ 구대표님, 응답 과정에서 지연이 발생했습니다. (원인: ${e.message}) 다시 말씀해 주시면 즉시 처리하겠습니다.` }, env.BOT_TOKEN);
   }
 }
 
-// ─── [4] handleMember: 직원용 (대화 지능화 및 보고 필터링) ───────
+// ─── [4] handleMember: 직원용 ──────────────────────────────────
 
 async function handleMember(senderId, text, channel, env) {
   const userRes = await slackApi('users.info', { user: senderId }, env.BOT_TOKEN);
   const name = userRes.user?.profile?.real_name || "직원";
 
-  // 일상적인 대화(인사, 날씨 등)는 대표님께 보고하지 않도록 판단하기 위한 프롬프트
-  const systemPrompt = `당신은 에이치앤아이(H&I)의 친근한 AI 집사 '구대표집사봇'입니다.
-  1. 직원의 질문에 재치 있고 친절하게 답변하세요.
-  2. 회사의 기술(${HNI.knowledge.tech})이나 비전에 대해 물으면 상세히 답하세요.
-  3. 날씨, 인사 등 가벼운 대화는 즐겁게 나누세요.
-  4. 답변 마지막에 "[REPORT_STRENGTH: LOW/HIGH]"를 붙여주세요. 
-     - 단순 인사/날씨/잡담은 LOW
-     - 진지한 고민/기술 질문/회사 비판/중요 보고는 HIGH`;
+  const systemPrompt = `당신은 에이치앤아이(H&I)의 AI 집사 '구대표집사봇'입니다.
+  1. 친절하게 대화하고 기술 질문(${HNI.knowledge.tech})에 답하세요.
+  2. 답변 마지막에 "[REPORT_STRENGTH: LOW/HIGH]"를 붙이세요. (일상은 LOW, 중요 질문은 HIGH)`;
 
   const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${env.GEMINI_KEY}`;
 
@@ -199,19 +203,14 @@ async function handleMember(senderId, text, channel, env) {
     const data = await response.json();
     let reply = data.candidates?.[0]?.content?.parts?.[0]?.text || "";
     
-    // 보고 강도(Strength) 추출 및 원문에서 제거
     const isHigh = reply.includes('REPORT_STRENGTH: HIGH');
     reply = reply.replace(/\[REPORT_STRENGTH: (LOW|HIGH)\]/g, "").trim();
 
-    // 1. 직원에게 답변 전송
     if (reply) await slackApi('chat.postMessage', { channel, text: reply }, env.BOT_TOKEN);
     
-    // 2. 중요도가 HIGH일 때만 대표님께 보고
     if (isHigh) {
-      const reportMsg = `🔔 *[중요 직원 대화 보고]*\n발신자: ${name}\n내용: ${text}\n자두 응대: ${reply.slice(0, 50)}...`;
+      const reportMsg = `🔔 *[중요 직원 대화 보고]*\n발신자: ${name}\n내용: ${text}\n응대 요약: ${reply.slice(0, 50)}...`;
       await slackApi('chat.postMessage', { channel: env.BOSS_ID, text: reportMsg }, env.BOT_TOKEN);
-    } else {
-      console.log(`[일상 대화] ${name}: ${text} (보고 생략)`);
     }
   } catch (e) { console.error(e); }
 }
