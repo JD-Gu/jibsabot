@@ -1,16 +1,21 @@
 import crypto from 'crypto';
 
-// ─── [1] 데이터 및 지식 베이스 ──────────────────────────────────
+// ─── [1] 데이터 및 지식 베이스 (H&I 전 직원 마스터 데이터 반영) ──────────
 const HNI = {
   members: {
-    '이종혁': { id: 'U02M86NGGM7', dept: '제품본부', role: '본부장' },
-    '김대수': { id: 'U03M1SGS352', dept: '경영본부', role: '본부장' },
-    '김인구': { id: 'U02M755LQHM', dept: '서비스지원팀', role: '팀장' },
-    '구자덕': { id: 'U02M1T5E1N3', dept: '경영진', role: '대표이사' },
-    '김봉석': { id: null, dept: '기술연구소', role: '소장' },
-    '김찬영': { id: null, dept: '기술연구소', role: '연구원' },
-    '이지민': { id: null, dept: '상품관리팀', role: '팀장' },
-    '정현수': { id: null, dept: '플랫폼팀', role: '팀장' },
+    '구자덕': { id: 'U02M1T5E1N3', email: 'ceo@hni-gl.com', dept: '경영진', role: '대표이사' },
+    '김다영': { id: 'U05CUH3GENN', email: 'kimdy@hni-gl.com', dept: '상품관리', role: '프로' },
+    '김민영': { id: 'U02MF3ANFF0', email: '10minyoung@hni-gl.com', dept: '상품관리', role: '프로' },
+    '김봉석': { id: 'U02M755FC0P', email: '24bong@hni-gl.com', dept: '디바이스', role: '팀장' },
+    '김인구': { id: 'U02M755LQHM', email: '05king@hni-gl.com', dept: '서비스지원', role: '팀장' },
+    '김찬영': { id: 'U02MMQVHM8T', email: '93cy@hni-gl.com', dept: '디바이스', role: '프로' },
+    '김훈지': { id: 'U02MMQV63RR', email: '73khj@hni-gl.com', dept: '서비스지원', role: '프로' },
+    '박인영': { id: 'U02MQ27A6CC', email: '54yy@hni-gl.com', dept: '플랫폼', role: '프로' },
+    '이지민': { id: 'U02MMQ4B4M8', email: '95jimin@hni-gl.com', dept: '상품관리', role: '팀장' },
+    '이창현': { id: 'U04DX8YR8SC', email: 'lch9772@hni-gl.com', dept: '디바이스', role: '프로' },
+    '정명휘': { id: 'U02MMQ40LE6', email: '31jmh@hni-gl.com', dept: '플랫폼', role: '프로' },
+    '정현수': { id: 'U02N0D92YE5', email: '25jhs@hni-gl.com', dept: '플랫폼', role: '팀장' },
+    '지우현': { id: 'U02MJRGEP7F', email: '90jay@hni-gl.com', dept: '플랫폼', role: '프로' }
   },
   knowledge: {
     companyName: "주식회사 에이치앤아이 (H&I)",
@@ -22,15 +27,10 @@ const HNI = {
       "공간정보 전문 역량 기반의 실시간 위치 보정 기술력 보유"
     ],
     technicalDetails: {
-      gnss_rtk: "Network-RTK 기반 cm급 초정밀 측위 기술. 자율주행, 드론 정밀 항법, 시설물 변위 모니터링에 활용.",
-      hi_ppe: "HI-PPE. 임베디드 제어 기술과 AI 엣지를 결합한 지능형 정밀측위솔루션.",
-      ai_live: "AI라이브 플랫폼. 실시간 위치 데이터와 AI 비전을 결합하여 현장의 상황을 디지털 트윈으로 구현하는 실시간 맵핑 기술.",
-      vision_ai: "AI 엣지 비전을 활용한 객체 인식 및 안전 위험 요소 실시간 감지 기술."
-    },
-    businessDomains: {
-      smart_construction: "건설 현장 안전 관리 플랫폼 및 지능형 PPE 보급",
-      telematics: "차량 및 이동체의 실시간 정밀 위치 관제 솔루션",
-      autonomous: "자율주행 로봇 및 드론을 위한 항법 보정 데이터 서비스"
+      gnss_rtk: "Network-RTK 기반 cm급 초정밀 측위 기술. 자율주행, 드론 정밀 항법 등에 활용.",
+      hi_ppe: "HI-PPE. 임베디드 제어 기술과 AI 엣지를 결합한 지능형 정밀측위 및 안전 솔루션.",
+      ai_live: "AI라이브 플랫폼. 실시간 위치 데이터와 AI 비전을 결합하여 디지털 트윈 구현.",
+      vision_ai: "AI 엣지 비전을 활용한 객체 인식 기술."
     },
     management_channels: {
       finance: { name: "cmm-cxo", id: "C02M8BMJZG9" }, 
@@ -56,11 +56,11 @@ const GEMINI_TOOLS = [{
     },
     {
       name: 'report_management_status',
-      description: '재무(#cmm-cxo), 영업(#cmm-영업지원), 업무일정(#업무일정) 채널의 최신 이력을 훑어서 보고합니다.',
+      description: '재무, 영업, 업무일정 채널의 이력을 훑어서 보고합니다.',
       parameters: {
         type: 'OBJECT',
         properties: {
-          category: { type: 'STRING', enum: ['finance', 'sales', 'calendar'], description: '보고 분야 (finance:재무, sales:영업, calendar:업무일정)' },
+          category: { type: 'STRING', enum: ['finance', 'sales', 'calendar'], description: '보고 분야' },
           query: { type: 'STRING', description: '요약 시 집중할 키워드 또는 인물 이름' }
         },
         required: ['category']
@@ -123,6 +123,20 @@ async function findUserIdByName(name, token) {
   return found ? found.id : null;
 }
 
+// ─── [3] 데이터 전처리: 텍스트 내 이메일을 실명으로 치환 ────────────────
+
+function resolveEmailsInText(text) {
+  let processedText = text;
+  Object.keys(HNI.members).forEach(name => {
+    const email = HNI.members[name].email;
+    if (email) {
+      const regex = new RegExp(email, 'gi');
+      processedText = processedText.replace(regex, name);
+    }
+  });
+  return processedText;
+}
+
 async function getChatContext(channel, token, limit = 8) {
   const res = await slackApi('conversations.history', { channel, limit }, token);
   if (!res.ok) return [];
@@ -135,15 +149,14 @@ async function getChatContext(channel, token, limit = 8) {
     }));
 }
 
-// ─── [3] handleBoss: 대표님용 (대상 중심 필터링 강화) ──────────────────
+// ─── [4] handleBoss: 대표님용 (마스터 데이터 기반 맥락 보고) ───────────────
 
 async function handleBoss(text, channel, env) {
   console.log(`[대표님 지시 수신] ${text}`);
-  const systemPrompt = `당신은 ${HNI.knowledge.companyName} 구대표님의 전담 비서 '구대표집사봇'입니다. 
-  1. [중요] 대표님이 특정 인물의 일정을 물으면(예: '이종혁 일정 알려줘'), 채널 이력에서 오직 그 인물에 해당하는 내용만 찾아 보고하세요. 다른 사람의 일정을 섞어서 보고하지 마세요.
-  2. 슬랙 ID가 보이면 반드시 사람 이름으로 치환하여 보고하세요.
-  3. 만약 찾는 인물의 정보가 채널 이력에 없다면, 정보를 찾지 못했다고 명확히 말씀드리세요.
-  4. 싹싹하고 전문적으로 대답하세요.`;
+  const systemPrompt = `당신은 ${HNI.knowledge.companyName} 구대표님의 전담 비서 '구대표집사봇'입니다.
+  1. [전 직원 명단 반영 완료] HNI.members에 등록된 13명의 정보를 완벽히 숙지하고 있습니다.
+  2. 특정 인물의 일정을 물으면, 해당 성함이 포함된 일정 데이터만 골라 요약 보고하세요.
+  3. 모든 보고는 싹싹하고 전문적으로, 대표님의 의사결정에 도움이 되도록 하세요.`;
 
   const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${env.GEMINI_KEY}`;
 
@@ -176,27 +189,25 @@ async function handleBoss(text, channel, env) {
           let targetId = HNI.members[args.name]?.id || await findUserIdByName(args.name, env.BOT_TOKEN);
           if (targetId) {
             await slackApi('chat.postMessage', { channel: targetId, text: args.message }, env.BOT_TOKEN);
-            await slackApi('chat.postMessage', { channel, text: `✅ 대표님, ${args.name}님께 메시지를 전달했습니다:\n> ${args.message}` }, env.BOT_TOKEN);
+            await slackApi('chat.postMessage', { channel, text: `✅ 대표님, ${args.name}님께 다음 내용을 전달했습니다:\n> ${args.message}` }, env.BOT_TOKEN);
           }
         }
         
         if (name === 'report_management_status') {
           const targetChannel = HNI.knowledge.management_channels[args.category];
-          console.log(`[정보 조회 시작] 채널: ${targetChannel.name}`);
-          
-          const historyRes = await slackApi('conversations.history', { channel: targetChannel.id, limit: 20 }, env.BOT_TOKEN);
+          const historyRes = await slackApi('conversations.history', { channel: targetChannel.id, limit: 30 }, env.BOT_TOKEN);
           
           if (historyRes.ok && historyRes.messages.length > 0) {
             const userCache = {};
             const messagesWithNames = await Promise.all(historyRes.messages.reverse().map(async (m) => {
-              if (!m.user) return `[기타] ${m.text}`;
-              let displayName = Object.keys(HNI.members).find(key => HNI.members[key].id === m.user);
-              if (!displayName && !userCache[m.user]) {
+              let senderName = Object.keys(HNI.members).find(key => HNI.members[key].id === m.user);
+              if (!senderName && m.user && !userCache[m.user]) {
                 const uInfo = await slackApi('users.info', { user: m.user }, env.BOT_TOKEN);
                 if (uInfo.ok) userCache[m.user] = uInfo.user.profile.real_name || uInfo.user.name;
               }
-              displayName = displayName || userCache[m.user] || m.user;
-              return `[성함:${displayName}] ${m.text}`;
+              senderName = senderName || userCache[m.user] || m.user || "시스템";
+              const resolvedText = resolveEmailsInText(m.text);
+              return `[발신:${senderName}] ${resolvedText}`;
             }));
 
             const context = messagesWithNames.join('\n\n');
@@ -204,14 +215,12 @@ async function handleBoss(text, channel, env) {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({
-                contents: [{ role: 'user', parts: [{ text: text }] }, { role: 'model', parts: [part] }, { role: 'user', parts: [{ text: `채널(#${targetChannel.name}) 내용입니다:\n${context}\n\n위 내용 중 대표님이 물어보신 대상에 대한 정보만 골라 요약 보고하세요. 관련 정보가 없으면 없다고 하세요.` }] }]
+                contents: [{ role: 'user', parts: [{ text: text }] }, { role: 'model', parts: [part] }, { role: 'user', parts: [{ text: `채널(#${targetChannel.name}) 가공 데이터:\n${context}\n\n위 내용에서 대표님이 물으신 '${args.query || '전체'}' 정보를 발췌 요약하세요.` }] }]
               })
             });
             const sData = await summaryRes.json();
             const sReply = sData.candidates?.[0]?.content?.parts?.[0]?.text;
             if (sReply) await slackApi('chat.postMessage', { channel, text: sReply }, env.BOT_TOKEN);
-          } else {
-            await slackApi('chat.postMessage', { channel, text: `❓ 데이터를 가져오지 못했습니다.` }, env.BOT_TOKEN);
           }
         }
       }
@@ -222,12 +231,12 @@ async function handleBoss(text, channel, env) {
   }
 }
 
-// ─── [4] handleMember: 직원용 ──────────────────────────────────
+// ─── [5] handleMember: 직원용 ──────────────────────────────────
 
 async function handleMember(senderId, text, channel, env) {
   const userRes = await slackApi('users.info', { user: senderId }, env.BOT_TOKEN);
   const name = userRes.user?.profile?.real_name || "직원";
-  const systemPrompt = `당신은 ${HNI.knowledge.companyName}의 AI 비서 '구대표집사봇'입니다. 기술 질문(${JSON.stringify(HNI.knowledge.technicalDetails)})에 답하고 친절히 대화하세요. 답변 마지막에 "[REPORT_STRENGTH: LOW/HIGH]"를 붙이세요.`;
+  const systemPrompt = `당신은 ${HNI.knowledge.companyName}의 AI 비서 '구대표집사봇'입니다. 사내 기술(${JSON.stringify(HNI.knowledge.technicalDetails)})에 답하고 친절히 대화하세요. 마지막에 [REPORT_STRENGTH: LOW/HIGH]를 붙이세요.`;
   const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${env.GEMINI_KEY}`;
 
   try {
@@ -248,7 +257,7 @@ async function handleMember(senderId, text, channel, env) {
   } catch (e) { console.error(e); }
 }
 
-// ─── [5] 메인 핸들러 ──────────────────────────────────────
+// ─── [6] 메인 핸들러 (최상위 예외 처리) ───────────────────────────
 
 export default async function handler(req, res) {
   try {
