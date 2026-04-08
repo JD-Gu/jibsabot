@@ -1,11 +1,11 @@
 /**
- * [v15.1] 구대표집사봇(H&I) 실전 운영용 통합 마스터 버전
+ * [v15.2] 구대표집사봇(H&I) 실전 운영용 통합 마스터 버전 (로깅 보강)
  * * * [통합된 핵심 기능]
- * 1. 초정밀 일정 관리: Google Calendar API (JWT RS256 인증) 정식 연동
- * 2. 3대 경영 도메인: 경영실적(finance), 영업현황(sales), 업무일정(calendar) 채널별 자동 스위칭
- * 3. 하이브리드 분석: 구글 서버 직접 데이터 + 슬랙 채널 히스토리 교차 검증
- * 4. 자가 진단 엔진: 404/403 에러 발생 시 봇이 접근 가능한 캘린더 목록을 역추적하여 보고
- * 5. 성능 최적화: Vercel 30초 타임아웃 방지를 위한 병렬 처리 및 사용자 조회 간소화
+ * 1. 로깅 시스템 강화: 인바운드 신호 및 API 처리 과정을 [TAG]별로 상세 로깅 (누락 방지)
+ * 2. 초정밀 일정 관리: Google Calendar API (JWT RS256 인증) 연동
+ * 3. 3대 경영 도메인: 경영실적(finance), 영업현황(sales), 업무일정(calendar) 채널별 스위칭
+ * 4. 자가 진단 엔진: 404/403 에러 발생 시 봇 접근 가능 캘린더 명단 역추적 보고
+ * 5. 성능 최적화: Vercel 30초 한도 내 병렬 처리 및 사용자 조회 최소화
  */
 
 import crypto from 'crypto';
@@ -76,7 +76,10 @@ async function getGoogleAccessToken() {
   const clientEmail = process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL?.trim();
   const privateKey = process.env.GOOGLE_PRIVATE_KEY?.replace(/\\n/g, '\n').trim();
 
-  if (!clientEmail || !privateKey) return { error: "인증 환경변수가 누락되었습니다." };
+  if (!clientEmail || !privateKey) {
+    console.error("[AUTH] Missing Credentials");
+    return { error: "인증 환경변수가 누락되었습니다." };
+  }
 
   try {
     const header = JSON.stringify({ alg: 'RS256', typ: 'JWT' });
@@ -102,12 +105,18 @@ async function getGoogleAccessToken() {
     });
 
     const data = await res.json();
-    if (data.error) return { error: `JWT 인증 실패: ${data.error_description || data.error}` };
+    if (data.error) {
+      console.error("[AUTH] JWT Exchange Error:", data.error);
+      return { error: `JWT 인증 실패: ${data.error}` };
+    }
     return { token: data.access_token };
-  } catch (e) { return { error: `인증 엔진 구동 실패: ${e.message}` }; }
+  } catch (e) { 
+    console.error("[AUTH] Fatal Error:", e.message);
+    return { error: `인증 엔진 구동 실패: ${e.message}` }; 
+  }
 }
 
-// ─── [3] 캘린더 및 슬랙 데이터 획득 엔진 ────────────────────────
+// ─── [3] 데이터 획득 엔진 ───────────────────────────────────
 
 async function getAccessibleCalendars(token) {
   try {
@@ -129,20 +138,26 @@ async function fetchCalendarEventsDirectly(queryDate) {
 
   const url = `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calendarId)}/events?timeMin=${start.toISOString()}&timeMax=${end.toISOString()}&singleEvents=true&orderBy=startTime`;
   
+  console.log(`[CALENDAR] Fetching: ${calendarId}`);
+
   try {
     const res = await fetch(url, { headers: { 'Authorization': `Bearer ${auth.token}` } });
     const data = await res.json();
     
     if (!res.ok) {
+      console.error("[CALENDAR] API Error:", res.status, data.error);
       if (res.status === 404) {
         const list = await getAccessibleCalendars(auth.token);
-        return { error: `404 Not Found: [${calendarId}] 접근 불가.`, diagnostics: `현재 봇 접근 가능 캘린더: ${list.join(', ') || '없음'}` };
+        return { error: `404 Not Found: [${calendarId}] 접근 불가.`, diagnostics: `현재 접근 가능 캘린더: ${list.join(', ') || '없음'}` };
       }
       return { error: `API Error ${res.status}: ${data.error?.message}` };
     }
     
     return { events: data.items?.map(ev => ({ title: ev.summary, time: ev.start.dateTime ? new Date(ev.start.dateTime).toLocaleTimeString('ko-KR') : "종일", location: ev.location || "장소미지정" })) || [] };
-  } catch (e) { return { error: `연동 실패: ${e.message}` }; }
+  } catch (e) { 
+    console.error("[CALENDAR] Network Error:", e.message);
+    return { error: `연동 실패: ${e.message}` }; 
+  }
 }
 
 async function slackApi(endpoint, body, token) {
@@ -173,6 +188,8 @@ async function handleBoss(text, channel, threadTs, env) {
   const tomorrow = new Date(now); tomorrow.setDate(tomorrow.getDate() + 1);
   const tomorrowKST = tomorrow.toLocaleString('ko-KR', optionsKST);
 
+  console.log(`[BOSS] Processing: "${text}" at ${nowKST}`);
+
   const systemPrompt = `당신은 ${HNI.knowledge.companyName} 구자덕 대표님의 수석 비서 '${HNI.knowledge.botName}'입니다.
   현재 시각: ${nowKST}
   [미션] 대표님의 질문 의도에 따라 아래 채널에서 데이터를 분석 보고하세요.
@@ -201,6 +218,7 @@ async function handleBoss(text, channel, threadTs, env) {
       
       if (part.functionCall) {
         const { name, args } = part.functionCall;
+        console.log(`[BOSS] Tool Call: ${name}`, args);
         
         if (name === 'report_management_status') {
           let rawData = "";
@@ -240,17 +258,19 @@ async function handleBoss(text, channel, threadTs, env) {
         }
       }
     }
-  } catch (e) { console.error("[BOSS ERROR]", e); }
+  } catch (e) { console.error("[BOSS] Error:", e); }
 }
 
-// ─── [5] 메인 핸들러 ──────────────────────────────────────
+// ─── [5] 메인 핸들러 (로깅 최적화) ─────────────────────────────────
 
 export default async function handler(req, res) {
   try {
     if (req.method !== 'POST') return res.status(405).end();
+    
     const chunks = [];
     for await (const chunk of req) chunks.push(chunk);
     const rawBody = Buffer.concat(chunks).toString('utf8');
+    
     const env = { 
       BOT_TOKEN: process.env.SLACK_BOT_TOKEN, 
       BOSS_ID: process.env.BOSS_USER_ID, 
@@ -258,7 +278,14 @@ export default async function handler(req, res) {
       SIGNING_SECRET: process.env.SLACK_SIGNING_SECRET 
     };
 
-    if (!verifySlackRequest(req, rawBody, env.SIGNING_SECRET)) return res.status(200).send('bad signature');
+    // 💡 [INBOUND] 수신된 신호를 즉시 로깅
+    console.log(`[INBOUND] Received Slack Signal. Body length: ${rawBody.length}`);
+
+    if (!verifySlackRequest(req, rawBody, env.SIGNING_SECRET)) {
+      console.warn("[SECURITY] Bad Signature.");
+      return res.status(200).send('bad signature');
+    }
+
     if (req.headers['x-slack-retry-num']) return res.status(200).send('ok');
     
     let body;
@@ -269,10 +296,18 @@ export default async function handler(req, res) {
     if (!event || event.bot_id || !event.text) return res.status(200).end();
     
     const cleanText = event.text.replace(/<@U[A-Z0-9]+>/g, '').trim();
+    
+    // 💡 [EVENT] 어떤 사용자가 어떤 채널에서 메시지를 보냈는지 로깅
+    console.log(`[EVENT] User: ${event.user}, Channel: ${event.channel}, Text: ${cleanText.substring(0, 20)}...`);
+
     if (event.user === env.BOSS_ID) {
       await handleBoss(cleanText, event.channel, event.thread_ts || event.ts, env);
     }
+    
     return res.status(200).send('ok');
-  } catch (e) { return res.status(200).send('error handled'); }
+  } catch (e) { 
+    console.error("[HANDLER ERROR]:", e);
+    return res.status(200).send('error handled'); 
+  }
 }
 export const config = { api: { bodyParser: false } };
