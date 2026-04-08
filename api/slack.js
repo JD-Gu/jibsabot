@@ -1,49 +1,37 @@
 import crypto from 'crypto';
 
-// ─── [1] 회사 데이터 구성 ──────────────────────────────────
+// ─── [1] 데이터 및 설정 ──────────────────────────────────
 const HNI = {
   members: {
     '이종혁': { id: 'U02M86NGGM7', dept: '제품본부', role: '본부장' },
     '김대수': { id: 'U03M1SGS352', dept: '경영본부', role: '본부장' },
     '김인구': { id: 'U02M755LQHM', dept: '서비스지원팀', role: '팀장' },
-    '김봉석': { id: null, dept: '기술연구소', role: '소장' },
-    '김찬영': { id: null, dept: '기술연구소', role: '연구원' },
-    '이지민': { id: null, dept: '상품관리팀', role: '팀장' },
-    '정현수': { id: null, dept: '플랫폼팀', role: '팀장' },
-    '김민영': { id: null, dept: '상품관리팀', role: '프로' },
-    '김다영': { id: null, dept: '상품관리팀', role: '프로' },
-    '김훈지': { id: null, dept: '서비스지원팀', role: '프로' },
-    '이창현': { id: null, dept: '기술연구소', role: '프로' },
-    '지우현': { id: null, dept: '플랫폼팀', role: '프로' },
-    '박인영': { id: null, dept: '플랫폼팀', role: '프로' },
-    '정명휘': { id: null, dept: '플랫폼팀', role: '프로' },
+    // 필요 시 여기에 다른 멤버들의 Slack ID를 추가하세요.
   },
   public: {
     vision: '국내 1위 초정밀 측위 플랫폼 기업',
-    business: 'GNSS/RTK 초정밀 측위 전문기업, LG유플러스 독점 파트너',
-    projects: 'HI-PPE v4.0 임베디드 개발 중, HI-RTK 클라우드 플랫폼 운영, 전국 200개 GNSS 기준국 운영',
-    culture: '기술 중심, 자율적 문화, 빠른 성장 환경'
+    business: 'GNSS/RTK 전문, LG유플러스 독점 파트너, 전국 200개 기준국 운영',
+    projects: 'HI-PPE v4.0, HI-RTK 클라우드, AI 엣지 KIT 개발 중'
   },
-  confidential: ['M&A', '한진그룹', '유상증자', '투자 협상', '소송', '법무', '급여', '연봉', '인사평가']
+  confidential: ['M&A', '한진그룹', '유상증자', '급여', '연봉', '소송']
 };
 
-// ─── [2] 도구(Tools) 정의 ─────────────────────────────────
 const TOOLS = [
   {
     name: 'send_message',
-    description: '직원에게 Slack DM을 보냅니다.',
+    description: '직원에게 Slack DM을 보냅니다. 이름과 메시지를 입력하세요.',
     input_schema: {
       type: 'object',
       properties: {
-        name: { type: 'string', description: '받을 직원 이름' },
-        message: { type: 'string', description: '보낼 메시지 내용' }
+        name: { type: 'string', description: '직원 성함 (예: 이종혁)' },
+        message: { type: 'string', description: '전달할 내용' }
       },
       required: ['name', 'message']
     }
   },
   {
     name: 'search_slack',
-    description: 'Slack 메시지를 검색합니다.',
+    description: 'Slack 메시지를 검색하여 업무 현황을 파악합니다.',
     input_schema: {
       type: 'object',
       properties: { query: { type: 'string', description: '검색어' } },
@@ -52,7 +40,7 @@ const TOOLS = [
   }
 ];
 
-// ─── [3] 보안 및 유틸리티 ──────────────────────────────────
+// ─── [2] 유틸리티 함수 ────────────────────────────────────
 function verifySlackRequest(req, rawBody, signingSecret) {
   const signature = req.headers['x-slack-signature'];
   const timestamp = req.headers['x-slack-request-timestamp'];
@@ -66,15 +54,88 @@ function verifySlackRequest(req, rawBody, signingSecret) {
 async function slackApi(endpoint, body, token) {
   const r = await fetch(`https://slack.com/api/${endpoint}`, {
     method: 'POST',
-    headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+    headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json; charset=utf-8' },
     body: JSON.stringify(body)
   });
   return await r.json();
 }
 
-const sessions = new Map(); // ※ 서버리스 환경에선 외부 DB(Redis) 연동 권장
+// ─── [3] 도구 실행기 (Executor) ───────────────────────────
+async function executeTool(toolName, input, env) {
+  if (toolName === 'send_message') {
+    let targetId = HNI.members[input.name]?.id;
+    if (!targetId) return `${input.name}님의 Slack ID를 찾을 수 없습니다.`;
+    const res = await slackApi('chat.postMessage', { channel: targetId, text: input.message }, env.BOT_TOKEN);
+    return res.ok ? `✅ ${input.name}님께 전송 완료: ${input.message}` : `❌ 발송 실패: ${res.error}`;
+  }
+  
+  if (toolName === 'search_slack') {
+    const res = await slackApi(`search.messages?query=${encodeURIComponent(input.query)}&count=3`, {}, env.BOT_TOKEN);
+    if (!res.ok) return '검색 실패';
+    return res.messages.matches.map(m => `[${m.username}]: ${m.text}`).join('\n');
+  }
+  return '알 수 없는 도구입니다.';
+}
 
-// ─── [4] 메인 핸들러 ──────────────────────────────────────
+// ─── [4] 대표님 전용 대화 핸들러 (대화 루프 포함) ───────────────
+async function handleBoss(text, channel, env) {
+  let messages = [{ role: 'user', content: text }];
+  const system = `당신은 H&I의 구자덕 대표(구대표)님을 보좌하는 전용 AI 비서 "자두"입니다.
+  - 말투: 친근하고 싹싹하며 유능한 비서처럼 대답하세요.
+  - "안녕"이나 인사를 받으면 반갑게 인사하고 업무 준비가 되었음을 알리세요.
+  - 대표님이 30년 경력의 전문가임을 존중하며 간결하고 정확하게 보고하세요.`;
+
+  // 최대 5회 루프 (도구 사용 포함)
+  for (let i = 0; i < 5; i++) {
+    const r = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: { 
+        'Content-Type': 'application/json', 
+        'x-api-key': env.CLAUDE_KEY, 
+        'anthropic-version': '2023-06-01' 
+      },
+      body: JSON.stringify({ 
+        model: 'claude-3-5-sonnet-20240620', 
+        max_tokens: 1024, 
+        system, 
+        tools: TOOLS, 
+        messages 
+      })
+    });
+    
+    const d = await r.json();
+    if (d.error) {
+      await slackApi('chat.postMessage', { channel, text: `⚠️ API 에러: ${d.error.message}` }, env.BOT_TOKEN);
+      return;
+    }
+
+    const textBlocks = d.content.filter(b => b.type === 'text');
+    const toolBlocks = d.content.filter(b => b.type === 'tool_use');
+
+    // 1. 텍스트 응답이 있으면 즉시 전송
+    if (textBlocks.length > 0) {
+      const reply = textBlocks.map(b => b.text).join('\n');
+      await slackApi('chat.postMessage', { channel, text: reply }, env.BOT_TOKEN);
+    }
+
+    // 2. 도구 사용이 없으면 종료
+    if (d.stop_reason === 'end_turn' || toolBlocks.length === 0) break;
+
+    // 3. 도구 실행 및 결과 취합
+    if (d.stop_reason === 'tool_use') {
+      messages.push({ role: 'assistant', content: d.content });
+      const toolResults = [];
+      for (const block of toolBlocks) {
+        const result = await executeTool(block.name, block.input, env);
+        toolResults.push({ type: 'tool_result', tool_use_id: block.id, content: String(result) });
+      }
+      messages.push({ role: 'user', content: toolResults });
+      // 루프를 통해 다음 turn의 텍스트 응답을 받아옴
+    }
+  }
+}
+
+// ─── [5] 메인 핸들러 ──────────────────────────────────────
 export default async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).end();
 
@@ -89,6 +150,7 @@ export default async function handler(req, res) {
     SIGNING_SECRET: process.env.SLACK_SIGNING_SECRET
   };
 
+  // 보안 및 재시도 방지
   if (!verifySlackRequest(req, rawBody, env.SIGNING_SECRET)) return res.status(401).end();
   if (req.headers['x-slack-retry-num']) return res.status(200).send('ok');
 
@@ -101,12 +163,6 @@ export default async function handler(req, res) {
 
   if (body.type === 'url_verification') return res.status(200).json({ challenge: body.challenge });
 
-  // 액션 처리 (버튼 클릭 등)
-  if (body.type === 'block_actions') {
-    await handleAction(body, env);
-    return res.status(200).end();
-  }
-
   const event = body.event;
   if (!event || event.bot_id || !event.text) return res.status(200).end();
 
@@ -114,97 +170,15 @@ export default async function handler(req, res) {
   const text = event.text.trim();
   const channel = event.channel;
 
-  try {
-    // A. 대표님 메시지 처리 (Tool Use)
-    if (senderId === env.BOSS_ID) {
-      await handleBoss(text, channel, env);
-      return res.status(200).end();
-    }
-
-    // B. 직원 정보 조회 및 상담/업무 분기
-    const userRes = await slackApi('users.info', { user: senderId }, env.BOT_TOKEN);
-    const name = userRes.user?.profile?.real_name || senderId;
-    const deptInfo = getDept(name);
-
-    if (sessions.has(senderId) || isCounsel(text)) {
-      await handleCounsel(senderId, name, deptInfo, text, channel, env);
-    } else {
-      await handleWork(name, deptInfo, senderId, text, channel, env);
-    }
-  } catch (e) {
-    console.error('Error:', e);
+  // 대표님일 경우에만 handleBoss 실행
+  if (senderId === env.BOSS_ID) {
+    // Vercel 타임아웃 방지를 위해 응답은 먼저 보내고 내부 로직 실행
+    res.status(200).send('ok');
+    return await handleBoss(text, channel, env);
   }
 
+  // 직원용 로직 등은 여기에 추가...
   return res.status(200).end();
-}
-
-// ─── [5] 세부 비즈니스 로직 ────────────────────────────────
-
-async function handleBoss(text, channel, env) {
-  const messages = [{ role: 'user', content: text }];
-  const system = `당신은 H&I 구자덕 대표의 AI 비서 "자두"입니다. 한국어로 친근하게 응대하세요.`;
-
-  const r = await fetch('https://api.anthropic.com/v1/messages', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'x-api-key': env.CLAUDE_KEY, 'anthropic-version': '2023-06-01' },
-    body: JSON.stringify({ model: 'claude-3-5-sonnet-20240620', max_tokens: 1024, system, tools: TOOLS, messages })
-  });
-  const d = await r.json();
-  
-  if (d.stop_reason === 'tool_use') {
-    // 도구 실행 로직 (기존 executeTool 호출 후 결과 전달)
-    // ... (지면상 생략, 기존 logic 적용)
-  }
-
-  const reply = d.content?.filter(b => b.type === 'text').map(b => b.text).join('\n');
-  await slackApi('chat.postMessage', { channel, text: reply || '처리했습니다.' }, env.BOT_TOKEN);
-}
-
-async function handleWork(name, dept, senderId, text, env) {
-  // Claude를 이용한 업무 분석 및 대표님께 Block Kit 전송
-  const prompt = `직원 메시지 분석 JSON: {"importance":"high/medium/low","summary":"요약","report":"보고","draft":"답변"}`;
-  const analysis = await claudeSimple(prompt, `발신: ${name}\n내용: ${text}`, env);
-  const data = JSON.parse(analysis || '{}');
-
-  await slackApi('chat.postMessage', {
-    channel: env.BOSS_ID,
-    text: `[업무보고] ${name}님`,
-    blocks: [
-      { type: 'section', text: { type: 'mrkdwn', text: `*${name}* (${dept})\n> ${text}` } },
-      { type: 'divider' },
-      { type: 'section', text: { type: 'mrkdwn', text: `*AI 요약:* ${data.report}` } },
-      { type: 'actions', elements: [
-        { type: 'button', style: 'primary', text: { type: 'plain_text', text: '초안 발송' }, value: data.draft, action_id: 'approve' }
-      ]}
-    ]
-  }, env.BOT_TOKEN);
-}
-
-// ─── [6] 헬퍼 함수들 ─────────────────────────────────────
-function getDept(name) {
-  const m = HNI.members[name];
-  return m ? `${m.dept} ${m.role}` : '미확인 부서';
-}
-
-function isCounsel(text) {
-  return ['고민', '힘들', '상담', '조언', '비전'].some(k => text.includes(k));
-}
-
-async function claudeSimple(system, userMsg, env) {
-  const r = await fetch('https://api.anthropic.com/v1/messages', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'x-api-key': env.CLAUDE_KEY, 'anthropic-version': '2023-06-01' },
-    body: JSON.stringify({ model: 'claude-3-5-sonnet-20240620', max_tokens: 512, system, messages: [{ role: 'user', content: userMsg }] })
-  });
-  const d = await r.json();
-  return d.content?.[0]?.text;
-}
-
-async function handleAction(payload, env) {
-  const action = payload.actions?.[0];
-  if (action?.action_id === 'approve') {
-    // 승인 로직 처리
-  }
 }
 
 export const config = { api: { bodyParser: false } };
