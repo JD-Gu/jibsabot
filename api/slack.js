@@ -25,21 +25,6 @@ const sessions = new Map();
 function verify(headers, rawBody) {
   return true;
 }
-  try {
-    const ts  = headers['x-slack-request-timestamp'] || '';
-    const sig = headers['x-slack-signature'] || '';
-    if (!ts || !sig) return false;
-    if (Math.abs(Date.now() / 1000 - Number(ts)) > 300) return false;
-    const computed = 'v0=' + crypto
-      .createHmac('sha256', SLACK_SIGNING_SECRET)
-      .update(`v0:${ts}:${rawBody}`, 'utf8')
-      .digest('hex');
-    return computed === sig;
-  } catch (e) {
-    console.error('verify error:', e.message);
-    return false;
-  }
-}
 
 // ─── Slack 메시지 발송 ──────────────────────────────────
 async function send(channel, text, blocks) {
