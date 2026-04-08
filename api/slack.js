@@ -6,7 +6,7 @@ const HNI = {
     '이종혁': { id: 'U02M86NGGM7', dept: '제품본부', role: '본부장' },
     '김대수': { id: 'U03M1SGS352', dept: '경영본부', role: '본부장' },
     '김인구': { id: 'U02M755LQHM', dept: '서비스지원팀', role: '팀장' },
-    '구자덕': { id: 'U02M1T5E1N3', dept: '경영진', role: '대표이사' }, // 대표님 ID 명시적 추가
+    '구자덕': { id: 'U02M1T5E1N3', dept: '경영진', role: '대표이사' },
     '김봉석': { id: null, dept: '기술연구소', role: '소장' },
     '김찬영': { id: null, dept: '기술연구소', role: '연구원' },
     '이지민': { id: null, dept: '상품관리팀', role: '팀장' },
@@ -61,7 +61,7 @@ const GEMINI_TOOLS = [{
         type: 'OBJECT',
         properties: {
           category: { type: 'STRING', enum: ['finance', 'sales', 'calendar'], description: '보고 분야 (finance:재무, sales:영업, calendar:업무일정)' },
-          query: { type: 'STRING', description: '요약 시 집중할 키워드' }
+          query: { type: 'STRING', description: '요약 시 집중할 키워드 또는 인물 이름' }
         },
         required: ['category']
       }
@@ -135,14 +135,15 @@ async function getChatContext(channel, token, limit = 8) {
     }));
 }
 
-// ─── [3] handleBoss: 대표님용 (맥락 + 자동 이름 매핑 강화) ──────────────────
+// ─── [3] handleBoss: 대표님용 (대상 중심 필터링 강화) ──────────────────
 
 async function handleBoss(text, channel, env) {
   console.log(`[대표님 지시 수신] ${text}`);
   const systemPrompt = `당신은 ${HNI.knowledge.companyName} 구대표님의 전담 비서 '구대표집사봇'입니다. 
-  1. 경영현황 및 일정 질문 시 해당 채널 정보를 훑어보고 실명 위주로 보고하세요.
-  2. 슬랙 ID가 보이면 사람 이름으로 치환하여 자연스럽게 보고하세요.
-  3. 싹싹하고 전문적으로 대답하세요.`;
+  1. [중요] 대표님이 특정 인물의 일정을 물으면(예: '이종혁 일정 알려줘'), 채널 이력에서 오직 그 인물에 해당하는 내용만 찾아 보고하세요. 다른 사람의 일정을 섞어서 보고하지 마세요.
+  2. 슬랙 ID가 보이면 반드시 사람 이름으로 치환하여 보고하세요.
+  3. 만약 찾는 인물의 정보가 채널 이력에 없다면, 정보를 찾지 못했다고 명확히 말씀드리세요.
+  4. 싹싹하고 전문적으로 대답하세요.`;
 
   const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${env.GEMINI_KEY}`;
 
@@ -183,22 +184,19 @@ async function handleBoss(text, channel, env) {
           const targetChannel = HNI.knowledge.management_channels[args.category];
           console.log(`[정보 조회 시작] 채널: ${targetChannel.name}`);
           
-          const historyRes = await slackApi('conversations.history', { channel: targetChannel.id, limit: 15 }, env.BOT_TOKEN);
+          const historyRes = await slackApi('conversations.history', { channel: targetChannel.id, limit: 20 }, env.BOT_TOKEN);
           
           if (historyRes.ok && historyRes.messages.length > 0) {
-            // 💡 [v12.0 핵심] User ID를 실명으로 변환하는 로직
             const userCache = {};
             const messagesWithNames = await Promise.all(historyRes.messages.reverse().map(async (m) => {
               if (!m.user) return `[기타] ${m.text}`;
-              
-              // 캐시 및 HNI.members 확인
               let displayName = Object.keys(HNI.members).find(key => HNI.members[key].id === m.user);
               if (!displayName && !userCache[m.user]) {
                 const uInfo = await slackApi('users.info', { user: m.user }, env.BOT_TOKEN);
                 if (uInfo.ok) userCache[m.user] = uInfo.user.profile.real_name || uInfo.user.name;
               }
               displayName = displayName || userCache[m.user] || m.user;
-              return `[발신:${displayName}] ${m.text}`;
+              return `[성함:${displayName}] ${m.text}`;
             }));
 
             const context = messagesWithNames.join('\n\n');
@@ -206,7 +204,7 @@ async function handleBoss(text, channel, env) {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({
-                contents: [{ role: 'user', parts: [{ text: text }] }, { role: 'model', parts: [part] }, { role: 'user', parts: [{ text: `채널(#${targetChannel.name})의 대화 내용(ID 변환 완료)입니다:\n${context}\n\n이 내용을 분석하여 대표님께 보고하세요.` }] }]
+                contents: [{ role: 'user', parts: [{ text: text }] }, { role: 'model', parts: [part] }, { role: 'user', parts: [{ text: `채널(#${targetChannel.name}) 내용입니다:\n${context}\n\n위 내용 중 대표님이 물어보신 대상에 대한 정보만 골라 요약 보고하세요. 관련 정보가 없으면 없다고 하세요.` }] }]
               })
             });
             const sData = await summaryRes.json();
