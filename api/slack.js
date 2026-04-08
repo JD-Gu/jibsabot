@@ -42,7 +42,6 @@ function verifySlackRequest(req, rawBody, signingSecret) {
 }
 
 async function slackApi(endpoint, body, token) {
-  console.log(`[Slack API 호출] endpoint: ${endpoint}`);
   const r = await fetch(`https://slack.com/api/${endpoint}`, {
     method: 'POST',
     headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json; charset=utf-8' },
@@ -53,15 +52,16 @@ async function slackApi(endpoint, body, token) {
   return res;
 }
 
-// ─── [3] Gemini API 핸들러 (응답 처리 강화) ───────────────────
+// ─── [3] Gemini API 핸들러 (모델명 및 에러 처리 수정) ─────────────
 
 async function handleBossWithGemini(text, channel, env) {
   const systemPrompt = `당신은 에이치앤아이(H&I) 구자덕 대표님의 AI 비서 '자두'입니다. 
   대표님의 "안녕" 같은 인사에는 반갑게 화답하고, 비서처럼 싹싹하게 대답하세요.`;
   
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${env.GEMINI_KEY}`;
+  // 모델명을 가장 범용적인 gemini-1.5-flash 로 지정 (v1beta)
+  const modelId = "gemini-1.5-flash";
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelId}:generateContent?key=${env.GEMINI_KEY}`;
   
-  // Gemini 1.5 표준 페이로드 구조
   const payload = {
     contents: [{ parts: [{ text: text }] }],
     system_instruction: { parts: [{ text: systemPrompt }] },
@@ -76,28 +76,32 @@ async function handleBossWithGemini(text, channel, env) {
     });
     
     const data = await response.json();
-    console.log('[Gemini 응답 수신]', JSON.stringify(data).slice(0, 500));
+
+    // 💡 에러 발생 시 슬랙으로 직접 보고하도록 수정
+    if (data.error) {
+      console.error('[Gemini API 에러]', data.error);
+      await slackApi('chat.postMessage', { 
+        channel, 
+        text: `⚠️ 자두 엔진(Gemini) 오류 발생!\n코드: ${data.error.code}\n메시지: ${data.error.message}` 
+      }, env.BOT_TOKEN);
+      return;
+    }
 
     const candidate = data.candidates?.[0];
     const parts = candidate?.content?.parts || [];
 
     if (parts.length === 0) {
-      console.warn('[경고] Gemini로부터 받은 부품(parts)이 없습니다.');
+      await slackApi('chat.postMessage', { channel, text: "🤔 자두가 명령을 이해하지 못했습니다. 다시 말씀해 주시겠어요?" }, env.BOT_TOKEN);
       return;
     }
 
     for (const part of parts) {
-      // 1. 텍스트 응답 처리
       if (part.text) {
-        console.log(`[자두 답변 전송] ${part.text}`);
         await slackApi('chat.postMessage', { channel, text: part.text }, env.BOT_TOKEN);
       }
 
-      // 2. 도구 실행 처리
       if (part.functionCall) {
         const { name, args } = part.functionCall;
-        console.log(`[도구 실행] ${name}`, args);
-        
         if (name === 'send_message') {
           let targetId = null;
           for (const [mName, mInfo] of Object.entries(HNI.members)) {
@@ -114,7 +118,8 @@ async function handleBossWithGemini(text, channel, env) {
       }
     }
   } catch (e) {
-    console.error('[Gemini 핸들러 에러]', e);
+    console.error('[런타임 에러]', e);
+    await slackApi('chat.postMessage', { channel, text: `⚠️ 시스템 에러: ${e.message}` }, env.BOT_TOKEN);
   }
 }
 
@@ -135,8 +140,6 @@ export default async function handler(req, res) {
   };
 
   if (!verifySlackRequest(req, rawBody, env.SIGNING_SECRET)) return res.status(401).end();
-  
-  // 슬랙 재시도 방지 (매우 중요)
   if (req.headers['x-slack-retry-num']) return res.status(200).send('ok');
 
   let body;
@@ -148,8 +151,7 @@ export default async function handler(req, res) {
   if (!event || event.bot_id || !event.text) return res.status(200).end();
 
   if (event.user === env.BOSS_ID) {
-    console.log(`[대표님 메시지 확인] ${event.text}`);
-    // Vercel에서 끝까지 실행되도록 await를 걸어줍니다.
+    // Vercel에서 끝까지 실행되도록 await 보장
     await handleBossWithGemini(event.text.trim(), event.channel, env);
     return res.status(200).send('ok');
   }
