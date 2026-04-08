@@ -58,8 +58,8 @@ async function handleBossWithGemini(text, channel, env) {
   const systemPrompt = `당신은 에이치앤아이(H&I) 구자덕 대표님의 AI 비서 '자두'입니다. 
   대표님의 "안녕" 같은 인사에는 반갑게 화답하고, 비서처럼 싹싹하게 대답하세요.`;
   
-  // 모델명을 가장 범용적인 gemini-1.5-flash 로 지정 (v1beta)
-  const modelId = "gemini-1.5-flash";
+  // 💡 모델명을 'gemini-1.5-flash-latest'로 변경하여 더 넓은 호환성을 확보합니다.
+  const modelId = "gemini-1.5-flash-latest";
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelId}:generateContent?key=${env.GEMINI_KEY}`;
   
   const payload = {
@@ -77,12 +77,15 @@ async function handleBossWithGemini(text, channel, env) {
     
     const data = await response.json();
 
-    // 💡 에러 발생 시 슬랙으로 직접 보고하도록 수정
+    // 에러 발생 시 상세 메시지를 슬랙으로 전송
     if (data.error) {
       console.error('[Gemini API 에러]', data.error);
+      let errorHint = "모델명을 확인해 주세요.";
+      if (data.error.code === 404) errorHint = "모델명을 'gemini-1.5-pro'로 바꿔 시도해 볼 수 있습니다.";
+      
       await slackApi('chat.postMessage', { 
         channel, 
-        text: `⚠️ 자두 엔진(Gemini) 오류 발생!\n코드: ${data.error.code}\n메시지: ${data.error.message}` 
+        text: `⚠️ 자두 엔진 오류 (404)\n메시지: ${data.error.message}\n조언: ${errorHint}` 
       }, env.BOT_TOKEN);
       return;
     }
@@ -91,7 +94,7 @@ async function handleBossWithGemini(text, channel, env) {
     const parts = candidate?.content?.parts || [];
 
     if (parts.length === 0) {
-      await slackApi('chat.postMessage', { channel, text: "🤔 자두가 명령을 이해하지 못했습니다. 다시 말씀해 주시겠어요?" }, env.BOT_TOKEN);
+      await slackApi('chat.postMessage', { channel, text: "🤔 자두가 잠시 생각을 정리하지 못했습니다. 다시 말씀해 주시겠어요?" }, env.BOT_TOKEN);
       return;
     }
 
@@ -119,7 +122,7 @@ async function handleBossWithGemini(text, channel, env) {
     }
   } catch (e) {
     console.error('[런타임 에러]', e);
-    await slackApi('chat.postMessage', { channel, text: `⚠️ 시스템 에러: ${e.message}` }, env.BOT_TOKEN);
+    await slackApi('chat.postMessage', { channel, text: `⚠️ 시스템 에러가 발생했습니다: ${e.message}` }, env.BOT_TOKEN);
   }
 }
 
@@ -151,7 +154,6 @@ export default async function handler(req, res) {
   if (!event || event.bot_id || !event.text) return res.status(200).end();
 
   if (event.user === env.BOSS_ID) {
-    // Vercel에서 끝까지 실행되도록 await 보장
     await handleBossWithGemini(event.text.trim(), event.channel, env);
     return res.status(200).send('ok');
   }
