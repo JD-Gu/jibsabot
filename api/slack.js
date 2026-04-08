@@ -105,19 +105,42 @@ async function findUserIdByName(name, token) {
   return found ? found.id : null;
 }
 
-// ─── [3] handleBoss: 대표님용 (강력한 경영 보고 포함) ───────────────
+// ─── [3] 맥락 유지를 위한 히스토리 추출기 ───────────────────────────
+
+async function getChatContext(channel, token, limit = 8) {
+  const res = await slackApi('conversations.history', { channel, limit }, token);
+  if (!res.ok) return [];
+  
+  // 슬랙은 최신순으로 주므로, Gemini를 위해 시간순(reverse)으로 정렬
+  // 메시지 중 텍스트가 있고, 봇 자신의 메시지(model)와 사용자의 메시지(user)를 구분
+  return res.messages
+    .reverse()
+    .filter(m => m.text && !m.text.includes('할당량이 소진되었습니다')) // 에러 메시지 제외
+    .map(m => ({
+      role: m.bot_id ? "model" : "user",
+      parts: [{ text: m.text }]
+    }));
+}
+
+// ─── [4] handleBoss: 대표님용 (맥락 유지 강화) ────────────────────
 
 async function handleBoss(text, channel, env) {
   console.log(`[대표님 지시 수신] ${text}`);
-  const systemPrompt = `당신은 주식회사 에이치앤아이(H&I) 구대표님의 전담 비서 '구대표집사봇'입니다. 싹싹하고 명확하게 보고하세요.`;
+  const systemPrompt = `당신은 에이치앤아이(H&I) 구대표님의 전담 비서 '구대표집사봇'입니다. 
+  1. 이전 대화 내용을 참고하여 맥락에 맞게 답변하세요.
+  2. 싹싹하고 명확하게 보고하세요.`;
+
   const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${env.GEMINI_KEY}`;
 
   try {
+    // 💡 [v11.7] 대화 맥락 가져오기
+    const history = await getChatContext(channel, env.BOT_TOKEN);
+    
     const response = await fetchWithRetry(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        contents: [{ parts: [{ text: text }] }],
+        contents: history, // 전체 대화 내역 전달
         system_instruction: { parts: [{ text: systemPrompt }] },
         tools: GEMINI_TOOLS
       })
@@ -125,7 +148,7 @@ async function handleBoss(text, channel, env) {
     
     const data = await response.json();
     if (data.error && data.error.code === 429) {
-      return await slackApi('chat.postMessage', { channel, text: "⏳ 구대표님, 현재 엔진 할당량이 소진되었습니다. 1분 후 다시 시도해 주세요." }, env.BOT_TOKEN);
+      return await slackApi('chat.postMessage', { channel, text: "⏳ 구대표님, 엔진 사용량이 많아 1분 후 다시 시도해 주세요." }, env.BOT_TOKEN);
     }
 
     const parts = data.candidates?.[0]?.content?.parts || [];
@@ -154,26 +177,23 @@ async function handleBoss(text, channel, env) {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({
-                contents: [{ role: 'user', parts: [{ text: text }] }, { role: 'model', parts: [part] }, { role: 'user', parts: [{ text: `채널(#${targetChannel.name})의 최근 이력입니다:\n${context}\n분석하여 요약 보고하세요.` }] }]
+                contents: [{ role: 'user', parts: [{ text: text }] }, { role: 'model', parts: [part] }, { role: 'user', parts: [{ text: `채널(#${targetChannel.name})의 최근 이력입니다:\n${context}\n요약 보고하세요.` }] }]
               })
             });
             const sData = await summaryRes.json();
             const sReply = sData.candidates?.[0]?.content?.parts?.[0]?.text;
             if (sReply) await slackApi('chat.postMessage', { channel, text: sReply }, env.BOT_TOKEN);
-          } else {
-            const errorMsg = historyRes.error === 'not_in_channel' ? `봇을 #${targetChannel.name} 채널에 초대해주세요.` : `데이터 오류: ${historyRes.error}`;
-            await slackApi('chat.postMessage', { channel, text: `❓ ${errorMsg}` }, env.BOT_TOKEN);
           }
         }
       }
     }
   } catch (e) {
     console.error('[핸들러 에러]', e);
-    await slackApi('chat.postMessage', { channel, text: `⚠️ 응답 중 오류가 발생했습니다. 잠시 후 다시 지시해주세요.` }, env.BOT_TOKEN);
+    await slackApi('chat.postMessage', { channel, text: `⚠️ 응답 중 오류가 발생했습니다. 다시 지시해주세요.` }, env.BOT_TOKEN);
   }
 }
 
-// ─── [4] handleMember: 직원용 ──────────────────────────────────
+// ─── [5] handleMember: 직원용 ──────────────────────────────────
 
 async function handleMember(senderId, text, channel, env) {
   const userRes = await slackApi('users.info', { user: senderId }, env.BOT_TOKEN);
@@ -182,10 +202,14 @@ async function handleMember(senderId, text, channel, env) {
   const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${env.GEMINI_KEY}`;
 
   try {
+    const history = await getChatContext(channel, env.BOT_TOKEN);
     const response = await fetchWithRetry(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ contents: [{ parts: [{ text: text }] }], system_instruction: { parts: [{ text: systemPrompt }] } })
+      body: JSON.stringify({ 
+        contents: history, 
+        system_instruction: { parts: [{ text: systemPrompt }] } 
+      })
     });
     const data = await response.json();
     let reply = data.candidates?.[0]?.content?.parts?.[0]?.text || "";
@@ -198,7 +222,7 @@ async function handleMember(senderId, text, channel, env) {
   } catch (e) { console.error(e); }
 }
 
-// ─── [5] 메인 핸들러 (최상위 예외 처리 강화) ──────────────────────
+// ─── [6] 메인 핸들러 ──────────────────────────────────────
 
 export default async function handler(req, res) {
   try {
