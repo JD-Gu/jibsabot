@@ -296,9 +296,19 @@ export default async function handler(req, res) {
   const event = body.event;
   if (!event) return res.status(200).end();
 
-  // 봇/자기 메시지 무시
-  if (event.bot_id || event.subtype === 'bot_message') return res.status(200).end();
-  if (event.user === BOSS_USER_ID) return res.status(200).end();
+// 봇 메시지 무시
+if (event.bot_id || event.subtype === 'bot_message') return res.status(200).end();
+
+// 대표님 명령어 처리
+if (event.user === BOSS_USER_ID) {
+  const text = event.text?.trim() || '';
+  const channel = event.channel;
+  if (text.startsWith('!')) {
+    const analysis = await analyzeWork(text.slice(1), '구자덕 대표', 'CEO');
+    await send(channel, `✅ 명령 처리됨\n${analysis.report}`);
+  }
+  return res.status(200).end();
+}
 
   // 메시지 이벤트
   if (event.type === 'message' && event.text) {
