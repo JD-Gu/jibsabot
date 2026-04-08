@@ -36,7 +36,10 @@ export default async function handler(req, res) {
 
   // Slack 메시지 발송 헬퍼
   async function slack(ch, txt, blocks) {
-    const b = blocks ? { channel: ch, text: txt, blocks } : { channel: ch, text: txt };
+    const fallback = txt || '집사봇 알림';
+    const b = blocks
+      ? { channel: ch, text: fallback, blocks }
+      : { channel: ch, text: fallback };
     const r = await fetch('https://slack.com/api/chat.postMessage', {
       method: 'POST',
       headers: {
@@ -80,10 +83,10 @@ export default async function handler(req, res) {
 친절하고 간결하게 한국어로 답하세요.`,
         text
       );
-      await slack(channel, reply);
+      await slack(channel, reply || '처리 완료');
     } catch(e) {
       console.error('boss error:', e.message);
-      await slack(channel, `오류가 발생했습니다: ${e.message}`);
+      await slack(channel, `오류: ${e.message}`);
     }
     return res.status(200).end();
   }
@@ -100,32 +103,37 @@ export default async function handler(req, res) {
     // Claude AI 분석
     const raw = await claude(
       `당신은 구자덕 대표(H&I)의 AI 집사봇입니다.
-직원 메시지를 분석해서 아래 형식의 JSON만 출력하세요. 다른 텍스트 없이.
+직원 메시지를 분석해서 아래 형식의 JSON만 출력하세요. 코드블록 없이 순수 JSON만.
 {"importance":"medium","summary":"한줄요약","report":"대표님께보고할내용","draft":"답변초안"}
-importance: high(결재/계약/인사/예산), medium(업무보고/이슈), low(단순문의/완료보고)`,
+importance: high(결재/계약/인사/예산), medium(업무보고/이슈), low(단순문의/완료보고)
+summary는 반드시 10자 이내로 작성하세요.`,
       `발신자: ${name}\n내용: ${text}`
     );
 
     // JSON 안전 추출
     let a = {};
     try {
-      const match = raw.match(/\{[\s\S]*\}/);
+      const match = raw.match(/\{[\s\S]*?\}/);
       a = JSON.parse(match ? match[0] : '{}');
     } catch {
       a = {};
     }
 
-    const importance = a.importance || 'medium';
-    const summary    = a.summary    || '메시지 수신';
-    const report     = a.report     || `${name}: ${text}`;
-    const draft      = a.draft      || '확인 후 답변 드리겠습니다.';
+    // 기본값 보장 (undefined 방지)
+    const importance = String(a.importance || 'medium');
+    const summary    = String(a.summary    || '메시지 수신');
+    const report     = String(a.report     || `${name}: ${text}`);
+    const draft      = String(a.draft      || '확인 후 답변 드리겠습니다.');
     const emoji      = { high: '🔴', medium: '🟡', low: '🟢' }[importance] || '⚪';
 
+    const headerText = `${emoji} ${summary}`;
+    const fallbackText = `${emoji} [집사봇] ${name}: ${summary}`;
+
     // 대표님께 보고 (승인 버튼 포함)
-    await slack(BOSS_ID, `${emoji} [집사봇] ${name}: ${summary}`, [
+    await slack(BOSS_ID, fallbackText, [
       {
         type: 'header',
-        text: { type: 'plain_text', text: `${emoji} ${summary}`, emoji: true }
+        text: { type: 'plain_text', text: headerText, emoji: true }
       },
       {
         type: 'section',
@@ -166,17 +174,7 @@ importance: high(결재/계약/인사/예산), medium(업무보고/이슈), low(
 
   } catch(e) {
     console.error('worker error:', e.message);
-    await fetch('https://slack.com/api/chat.postMessage', {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${BOT_TOKEN}`,
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({
-        channel: BOSS_ID,
-        text: `⚠️ 오류\n발신자: ${senderId}\n내용: ${text}\n오류: ${e.message}`
-      })
-    });
+    await slack(BOSS_ID, `⚠️ 오류\n발신자: ${senderId}\n내용: ${text}\n오류: ${e.message}`);
   }
 
   return res.status(200).end();
