@@ -152,11 +152,18 @@ async function getChatContext(channel, token, limit = 8) {
 // ─── [4] handleBoss: 대표님용 (마스터 데이터 기반 맥락 보고) ───────────────
 
 async function handleBoss(text, channel, env) {
+  // 💡 [v12.5 핵심] AI에게 현재 날짜/시간 정보를 주입
+  const now = new Date().toLocaleString('ko-KR', { timeZone: 'Asia/Seoul' });
+  
   console.log(`[대표님 지시 수신] ${text}`);
   const systemPrompt = `당신은 ${HNI.knowledge.companyName} 구대표님의 전담 비서 '구대표집사봇'입니다.
-  1. [전 직원 명단 반영 완료] HNI.members에 등록된 13명의 정보를 완벽히 숙지하고 있습니다.
-  2. 특정 인물의 일정을 물으면, 해당 성함이 포함된 일정 데이터만 골라 요약 보고하세요.
-  3. 모든 보고는 싹싹하고 전문적으로, 대표님의 의사결정에 도움이 되도록 하세요.`;
+  
+  현재 시각: ${now} (이 정보를 기준으로 '오늘', '내일', '모레'를 계산하세요)
+  
+  지침:
+  1. [전 직원 명단 반영] HNI.members에 등록된 정보를 바탕으로 이메일을 성함으로 치환하여 인식합니다.
+  2. 일정을 물으면(예: '내일 일정'), 현재 시각을 기준으로 해당 날짜의 데이터를 채널 이력에서 찾아 요약 보고하세요.
+  3. 모든 보고는 싹싹하고 전문적으로 하세요.`;
 
   const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${env.GEMINI_KEY}`;
 
@@ -195,7 +202,8 @@ async function handleBoss(text, channel, env) {
         
         if (name === 'report_management_status') {
           const targetChannel = HNI.knowledge.management_channels[args.category];
-          const historyRes = await slackApi('conversations.history', { channel: targetChannel.id, limit: 30 }, env.BOT_TOKEN);
+          // 💡 탐색 범위를 50개로 확장하여 더 많은 일정을 훑음
+          const historyRes = await slackApi('conversations.history', { channel: targetChannel.id, limit: 50 }, env.BOT_TOKEN);
           
           if (historyRes.ok && historyRes.messages.length > 0) {
             const userCache = {};
@@ -215,7 +223,7 @@ async function handleBoss(text, channel, env) {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({
-                contents: [{ role: 'user', parts: [{ text: text }] }, { role: 'model', parts: [part] }, { role: 'user', parts: [{ text: `채널(#${targetChannel.name}) 가공 데이터:\n${context}\n\n위 내용에서 대표님이 물으신 '${args.query || '전체'}' 정보를 발췌 요약하세요.` }] }]
+                contents: [{ role: 'user', parts: [{ text: text }] }, { role: 'model', parts: [part] }, { role: 'user', parts: [{ text: `기준 시각: ${now}\n채널 가공 데이터:\n${context}\n\n위 데이터에서 사용자가 요청한 날짜(예: 내일)의 일정만 추출하여 보고하세요.` }] }]
               })
             });
             const sData = await summaryRes.json();
