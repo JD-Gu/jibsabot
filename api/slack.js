@@ -414,15 +414,41 @@ async function fetchNewsWithSearch(keywords, geminiKey) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         contents: [{ role: 'user', parts: [{ text:
-          `다음 키워드 관련 최신 뉴스를 검색하여 한국어로 브리핑해 주세요: ${q}\n\n` +
-          `형식:\n1. [기사 제목]\n   - 요약: (2~3문장)\n   - 출처: (언론사명)\n   - 날짜: (발행일)\n   - H&I 관련성: (한 줄)\n\n없으면 솔직히 알려주세요.`
+          `다음 키워드 관련 최신 뉴스를 검색하여 최대 5건 정리해 주세요: ${q}\n\n` +
+          `각 항목 형식 (번호, 제목, 한 줄 요약, 언론사, 날짜, H&I 관련성 순):\n` +
+          `[번호]. [제목]\n요약: (2~3문장)\n출처: (언론사) | 날짜: (YYYY-MM-DD)\nH&I 관련성: (한 줄)`
         }] }],
         tools: [{ google_search: {} }]
       })
     });
     const data = await res.json();
-    return data.candidates?.[0]?.content?.parts?.[0]?.text || '뉴스 검색 결과를 가져오지 못했습니다.';
-  } catch (e) { return `뉴스 검색 오류: ${e.message}`; }
+    const text   = data.candidates?.[0]?.content?.parts?.[0]?.text || '뉴스 검색 결과를 가져오지 못했습니다.';
+    const chunks = data.candidates?.[0]?.groundingMetadata?.groundingChunks || [];
+    return { text, chunks };
+  } catch (e) { return { text: `뉴스 검색 오류: ${e.message}`, chunks: [] }; }
+}
+
+/** Gemini 뉴스 결과 + grounding 링크 → Slack 가독성 포맷 */
+function formatNewsSlackMessage(text, chunks) {
+  // 본문: 번호별 블록을 이모지로 꾸밈
+  const body = text
+    .replace(/^\[?(\d+)\]?\.\s+/gm, (_, n) => `\n${'─'.repeat(36)}\n*${['1️⃣','2️⃣','3️⃣','4️⃣','5️⃣'][+n-1] || `${n}.`} `)
+    .replace(/^요약:/gm, '   📝 요약:')
+    .replace(/^출처:/gm, '   📌 출처:')
+    .replace(/^H&I 관련성:/gm, '   🏢 관련성:')
+    .trim();
+
+  // grounding 링크 (중복 제거)
+  const seen = new Set();
+  const links = chunks
+    .filter(c => c.web?.uri && c.web?.title)
+    .filter(c => { if (seen.has(c.web.uri)) return false; seen.add(c.web.uri); return true; })
+    .slice(0, 8)
+    .map((c, i) => `${i + 1}. <${c.web.uri}|${c.web.title}>`)
+    .join('\n');
+
+  const linkBlock = links ? `\n\n${'─'.repeat(36)}\n🔗 *기사 링크*\n${links}` : '';
+  return `📰 *뉴스 브리핑*  _(${new Date().toLocaleDateString('ko-KR', { timeZone: 'Asia/Seoul' })})_\n${body}${linkBlock}`;
 }
 
 // ─── [6] S6 채널 일괄 요약 ───────────────────────────────────────────
@@ -651,10 +677,15 @@ async function handleBoss(text, channel, threadTs, env) {
 
         // ── S3 뉴스 검색 ──
         if (name === 'search_news') {
-          const newsText = await fetchNewsWithSearch(args.keywords, env.GEMINI_KEY);
+          const { text: newsText, chunks } = await fetchNewsWithSearch(args.keywords, env.GEMINI_KEY);
+          const formatted = formatNewsSlackMessage(newsText, chunks);
+          // 대표님께 스레드 응답
           await slackApi('chat.postMessage', {
-            channel, thread_ts: threadTs,
-            text: `📰 *[뉴스 브리핑]*\n\n${newsText}`
+            channel, thread_ts: threadTs, text: formatted
+          }, env.BOT_TOKEN);
+          // #news 채널에도 공유
+          await slackApi('chat.postMessage', {
+            channel: 'C02MND8B0KE', text: formatted
           }, env.BOT_TOKEN);
 
         // ── S6 채널 일괄 요약 ──
