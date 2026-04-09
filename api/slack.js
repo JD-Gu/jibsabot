@@ -38,7 +38,7 @@ const HNI = {
     companyName: '주식회사 에이치앤아이 (H&I)',
     botName: '구대표집사봇',
     coreTech: 'GNSS/RTK 초정밀 측위, HI-PPE v4.0 지능형 안전 장구, IoT 플랫폼, AI 비전 엣지, HI-RTK, U+ 초정밀측위 OEM',
-    newsKeywords: 'GNSS RTK 초정밀측위 HI-RTK IoT 안전장구 AI비전 국토부측위 스마트건설',
+    newsKeywords: ['GNSS', 'RTK', '초정밀측위', '스마트시티', '스마트건설'],
 
     /** §5.1 기존 3채널 — report_management_status tool enum과 동일 */
     management_channels: {
@@ -405,28 +405,49 @@ async function fetchCalendarEventsForKstDay(ymd) {
 
 // ─── [5] S3 뉴스 검색 (Gemini Google Search) ─────────────────────────
 
-async function fetchNewsWithSearch(keywords, geminiKey) {
-  const q = keywords?.trim() || HNI.knowledge.newsKeywords;
+/** 키워드 하나에 대한 단일 검색 */
+async function searchOneKeyword(keyword, today, geminiKey) {
   const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${geminiKey}`;
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      contents: [{ role: 'user', parts: [{ text:
+        `오늘 날짜: ${today}\n\n` +
+        `"${keyword}" 관련 뉴스를 검색하여 최근 7일 이내 기사만 최대 2건 정리해 주세요.\n` +
+        `7일 이상 지난 기사는 제외합니다. 없으면 "최근 뉴스 없음"이라고만 써 주세요.\n\n` +
+        `형식:\n[제목]\n요약: (2~3문장)\n출처: (언론사) | 날짜: (YYYY-MM-DD)\nH&I 관련성: (한 줄)`
+      }] }],
+      tools: [{ google_search: {} }]
+    })
+  });
+  const data = await res.json();
+  return {
+    keyword,
+    text:   data.candidates?.[0]?.content?.parts?.[0]?.text || '검색 실패',
+    chunks: data.candidates?.[0]?.groundingMetadata?.groundingChunks || []
+  };
+}
+
+/** 키워드 배열 또는 단일 문자열을 받아 키워드별 병렬 검색 후 합산 */
+async function fetchNewsWithSearch(keywords, geminiKey) {
+  const today = new Date().toLocaleDateString('ko-KR', { timeZone: 'Asia/Seoul' });
+
+  // 사용자가 키워드를 직접 지정한 경우: 쉼표/공백으로 분리
+  let keywordList;
+  if (keywords && keywords.trim()) {
+    keywordList = keywords.split(/[,，\s]+/).map(k => k.trim()).filter(Boolean);
+  } else {
+    keywordList = HNI.knowledge.newsKeywords; // 기본 배열
+  }
+
   try {
-    const res = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        contents: [{ role: 'user', parts: [{ text:
-          `오늘 날짜: ${new Date().toLocaleDateString('ko-KR', { timeZone: 'Asia/Seoul' })}\n\n` +
-          `다음 키워드 관련 뉴스를 검색하여 **오늘 또는 최근 7일 이내** 기사만 최대 5건 정리해 주세요: ${q}\n\n` +
-          `⚠️ 반드시 최신 기사만 포함하세요. 7일 이상 지난 기사는 제외합니다.\n\n` +
-          `각 항목 형식:\n` +
-          `[번호]. [제목]\n요약: (2~3문장)\n출처: (언론사) | 날짜: (YYYY-MM-DD)\nH&I 관련성: (한 줄)`
-        }] }],
-        tools: [{ google_search: {} }]
-      })
-    });
-    const data = await res.json();
-    const text   = data.candidates?.[0]?.content?.parts?.[0]?.text || '뉴스 검색 결과를 가져오지 못했습니다.';
-    const chunks = data.candidates?.[0]?.groundingMetadata?.groundingChunks || [];
-    return { text, chunks };
+    const results = await Promise.all(keywordList.map(kw => searchOneKeyword(kw, today, geminiKey)));
+    const allChunks = results.flatMap(r => r.chunks);
+    const combinedText = results
+      .map(r => `🔍 *[${r.keyword}]*\n${r.text}`)
+      .join('\n\n');
+    return { text: combinedText, chunks: allChunks };
   } catch (e) { return { text: `뉴스 검색 오류: ${e.message}`, chunks: [] }; }
 }
 
