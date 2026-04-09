@@ -414,8 +414,10 @@ async function fetchNewsWithSearch(keywords, geminiKey) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         contents: [{ role: 'user', parts: [{ text:
-          `다음 키워드 관련 최신 뉴스를 검색하여 최대 5건 정리해 주세요: ${q}\n\n` +
-          `각 항목 형식 (번호, 제목, 한 줄 요약, 언론사, 날짜, H&I 관련성 순):\n` +
+          `오늘 날짜: ${new Date().toLocaleDateString('ko-KR', { timeZone: 'Asia/Seoul' })}\n\n` +
+          `다음 키워드 관련 뉴스를 검색하여 **오늘 또는 최근 7일 이내** 기사만 최대 5건 정리해 주세요: ${q}\n\n` +
+          `⚠️ 반드시 최신 기사만 포함하세요. 7일 이상 지난 기사는 제외합니다.\n\n` +
+          `각 항목 형식:\n` +
           `[번호]. [제목]\n요약: (2~3문장)\n출처: (언론사) | 날짜: (YYYY-MM-DD)\nH&I 관련성: (한 줄)`
         }] }],
         tools: [{ google_search: {} }]
