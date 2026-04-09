@@ -405,6 +405,31 @@ async function fetchCalendarEventsForKstDay(ymd) {
 
 // ─── [5] S3 뉴스 검색 (Gemini Google Search) ─────────────────────────
 
+// 허용 언론사 도메인 (주요 국내외 신뢰 매체)
+const TRUSTED_NEWS_DOMAINS = [
+  // 국내 주요 일간지·경제지
+  'chosun.com','joongang.co.kr','donga.com','hani.co.kr','khan.co.kr',
+  'mk.co.kr','hankyung.com','etnews.com','zdnet.co.kr','bloter.net',
+  'yna.co.kr','yonhapnews.co.kr','newsis.com','news1.kr','newspim.com',
+  'edaily.co.kr','thebell.co.kr','sedaily.com','mt.co.kr','biz.chosun.com',
+  // 전문지·산업지
+  'electimes.com','koreabizwire.com','irobotnews.com','aitimes.com',
+  'itbiznews.com','dt.co.kr','inews24.com','ddaily.co.kr','itworld.co.kr',
+  'ciokorea.com','datanet.co.kr','g-enews.com','klnews.co.kr',
+  // 국내 방송
+  'news.kbs.co.kr','imnews.imbc.com','news.sbs.co.kr','ytn.co.kr',
+  // 국제
+  'reuters.com','bloomberg.com','techcrunch.com','gpsworld.com','insidegnss.com'
+];
+
+function isTrustedNewsUrl(uri) {
+  if (!uri) return false;
+  try {
+    const host = new URL(uri).hostname.replace(/^www\./, '');
+    return TRUSTED_NEWS_DOMAINS.some(d => host === d || host.endsWith('.' + d));
+  } catch { return false; }
+}
+
 /** 키워드 하나에 대한 단일 검색 */
 async function searchOneKeyword(keyword, today, geminiKey) {
   const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${geminiKey}`;
@@ -415,7 +440,9 @@ async function searchOneKeyword(keyword, today, geminiKey) {
       contents: [{ role: 'user', parts: [{ text:
         `오늘 날짜: ${today}\n\n` +
         `"${keyword}" 관련 뉴스를 검색하여 최근 7일 이내 기사만 최대 2건 정리해 주세요.\n` +
-        `7일 이상 지난 기사는 제외합니다. 없으면 "최근 뉴스 없음"이라고만 써 주세요.\n\n` +
+        `⚠️ 반드시 연합뉴스, 조선일보, 중앙일보, 동아일보, 한국경제, 매일경제, 전자신문, ZDNet, 뉴시스, 뉴스1 등 ` +
+        `신뢰할 수 있는 주요 언론사 기사만 사용하세요. 블로그, 커뮤니티, 성인·낚시성 사이트는 절대 포함하지 마세요.\n` +
+        `7일 이상 지난 기사나 신뢰할 수 없는 출처는 제외합니다. 없으면 "최근 뉴스 없음"이라고만 써 주세요.\n\n` +
         `형식:\n[제목]\n요약: (2~3문장)\n출처: (언론사) | 날짜: (YYYY-MM-DD)\nH&I 관련성: (한 줄)`
       }] }],
       tools: [{ google_search: {} }]
@@ -425,7 +452,9 @@ async function searchOneKeyword(keyword, today, geminiKey) {
   return {
     keyword,
     text:   data.candidates?.[0]?.content?.parts?.[0]?.text || '검색 실패',
-    chunks: data.candidates?.[0]?.groundingMetadata?.groundingChunks || []
+    // 허용 도메인 링크만 통과
+    chunks: (data.candidates?.[0]?.groundingMetadata?.groundingChunks || [])
+              .filter(c => isTrustedNewsUrl(c.web?.uri))
   };
 }
 
