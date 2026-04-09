@@ -1,10 +1,7 @@
 /**
- * [v15.3] 구대표집사봇(H&I) 실전 운영용 통합 마스터 버전 (버그 수정 및 로깅 완비)
- * * * [수정 사항]
- * 1. ReferenceError 해결: 누락되었던 verifySlackRequest 보안 검증 함수 복구
- * 2. 로깅 시스템 표준화: [INBOUND], [AUTH], [EVENT], [TOOL] 등 태그별 로깅 유지
- * 3. 통합 기능 유지: Google Calendar API(JWT), 3대 채널 분석, 자가 진단 엔진 포함
- * 4. 안정성 강화: 비정상적인 신호 유입 시 예외 처리 및 에러 보고 로직 강화
+ * [v15.4] 구대표집사봇(H&I) — 기획서(기획서.md) §5·§7과 채널 ID·용어 정렬
+ * - management_channels ↔ Slack 실채널명: #cmm-cxo, #cmm-영업지원, #noti-업무일정
+ * - Google Calendar API(JWT 읽기전용), Gemini 2.5 Flash, Slack 서명 검증·로깅
  */
 
 import crypto from 'crypto';
@@ -31,10 +28,11 @@ const HNI = {
     companyName: "주식회사 에이치앤아이 (H&I)",
     botName: "구대표집사봇",
     coreTech: "GNSS/RTK 초정밀 측위, HI-PPE v4.0 지능형 안전 장구, IoT 플랫폼, AI 비전 엣지",
+    /** 기획서 §5.1·코드 대응표 — 키는 Gemini tool enum과 동일 */
     management_channels: {
-      finance: { name: "경영재무", id: "C02M8BMJZG9" }, 
-      sales: { name: "영업지원", id: "C06DRAHHAQZ" },
-      calendar: { name: "업무일정", id: "C03R1QVMKC4" }
+      finance: { name: "cmm-cxo", id: "C02M8BMJZG9" },
+      sales: { name: "cmm-영업지원", id: "C06DRAHHAQZ" },
+      calendar: { name: "noti-업무일정", id: "C03R1QVMKC4" }
     },
     googleCalendarId: (process.env.GOOGLE_CALENDAR_ID || '09jj@hni-gl.com').trim()
   }
@@ -44,11 +42,11 @@ const GEMINI_TOOLS = [{
   function_declarations: [
     {
       name: 'report_management_status',
-      description: '사내 경영(재무), 영업, 일정 관련 데이터를 해당 채널에서 조회하여 분석 보고합니다.',
+      description: '사내 CXO·경영보고(finance=#cmm-cxo), 영업지원(sales=#cmm-영업지원), 일정(calendar=구글캘린더+#noti-업무일정) 데이터를 조회·분석 보고합니다.',
       parameters: {
         type: 'OBJECT',
         properties: {
-          category: { type: 'STRING', enum: ['finance', 'sales', 'calendar'], description: '분야' },
+          category: { type: 'STRING', enum: ['finance', 'sales', 'calendar'], description: 'finance|sales|calendar' },
           query: { type: 'STRING', description: '검색 날짜 또는 키워드' }
         },
         required: ['category']
@@ -110,7 +108,7 @@ function resolveEmailsInText(text) {
 
 // ─── [3] 구글 정식 인증 및 데이터 엔진 ────────────────────────
 
-async function getgleAccessToken() {
+async function getGoogleAccessToken() {
   const clientEmail = process.env.GOOGLE_CLIENT_EMAIL?.trim();
   const privateKey = process.env.GOOGLE_PRIVATE_KEY?.replace(/\\n/g, '\n').trim();
 
@@ -195,10 +193,11 @@ async function handleBoss(text, channel, threadTs, env) {
 
   const systemPrompt = `당신은 ${HNI.knowledge.companyName} 구자덕 대표님의 수석 비서 '${HNI.knowledge.botName}'입니다.
   현재 시각: ${nowKST}
-  [미션] 대표님의 질문 의도에 따라 아래 채널에서 데이터를 분석 보고하세요.
-  1. 경영실적/현황: #경영재무 채널(finance)
-  2. 영업실적/현황: #영업지원 채널(sales)
-  3. 업무일정: 구글 캘린더 API + #업무일정 채널(calendar)`;
+  [미션] 대표님 질의에 맞게 report_management_status 도구로 분야를 선택하세요.
+  1. 경영·CXO 보고 맥락: Slack #cmm-cxo (도구 키 finance)
+  2. 영업 지원 맥락: Slack #cmm-영업지원 (도구 키 sales)
+  3. 업무 일정: Google Calendar(읽기) + Slack #noti-업무일정 히스토리 (도구 키 calendar)
+  권장 명령 채널(기획): #jj-프롬프트 — 다른 채널·DM에서 멘션해도 동일하게 동작합니다.`;
 
   const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${env.GEMINI_KEY}`;
 
@@ -226,17 +225,24 @@ async function handleBoss(text, channel, threadTs, env) {
         if (name === 'report_management_status') {
           let rawData = "";
           const targetChannel = HNI.knowledge.management_channels[args.category];
-          
+          if (!targetChannel) {
+            console.warn('[BOSS] report_management_status: unknown category', args.category);
+            await slackApi('chat.postMessage', { channel, text: `⚠️ 알 수 없는 분야입니다: ${args.category}`, thread_ts: threadTs }, env.BOT_TOKEN);
+            continue;
+          }
+
           if (args.category === 'calendar') {
             const apiResult = await fetchCalendarEventsDirectly(tomorrow);
             if (apiResult.error) rawData = `[⚠️ API 연동 에러]\n사유: ${apiResult.error}\n진단: ${apiResult.diagnostics || '없음'}\n\n`;
             else rawData = `[1. 구글 캘린더 직접 데이터]\n${JSON.stringify(apiResult.events)}\n\n`;
           }
-          
+
           const historyRes = await slackApi('conversations.history', { channel: targetChannel.id, limit: 100 }, env.BOT_TOKEN);
           if (historyRes.ok) {
             const context = historyRes.messages.reverse().map(m => `[발신:${Object.keys(HNI.members).find(k=>HNI.members[k].id===m.user)||m.user}] ${resolveEmailsInText(m.text)}`).join('\n\n');
             rawData += `[#${targetChannel.name} 채널 데이터]\n${context}`;
+          } else {
+            rawData += `[#${targetChannel.name} 채널] 히스토리 조회 실패: ${historyRes.error || 'unknown'}`;
           }
 
           const summaryRes = await fetch(url, {
@@ -283,7 +289,7 @@ export default async function handler(req, res) {
 
     console.log(`[INBOUND] Received Slack Signal. Body length: ${rawBody.length}`);
 
-    // 💡 [v15.3] verifySlackRequest 함수가 이제 정의되어 있어 에러가 나지 않습니다.
+    // Slack Signing Secret 검증 (Replay 방지 포함)
     if (!verifySlackRequest(req, rawBody, env.SIGNING_SECRET)) {
       console.warn("[SECURITY] Invalid Signature.");
       return res.status(200).send('bad signature');
