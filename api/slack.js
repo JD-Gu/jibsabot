@@ -110,8 +110,8 @@ function resolveEmailsInText(text) {
 
 // ─── [3] 구글 정식 인증 및 데이터 엔진 ────────────────────────
 
-async function getGoogleAccessToken() {
-  const clientEmail = process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL?.trim();
+async function getgleAccessToken() {
+  const clientEmail = process.env.GOOGLE_CLIENT_EMAIL?.trim();
   const privateKey = process.env.GOOGLE_PRIVATE_KEY?.replace(/\\n/g, '\n').trim();
 
   if (!clientEmail || !privateKey) {
