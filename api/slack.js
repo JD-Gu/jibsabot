@@ -1,7 +1,6 @@
 /**
- * [v15.5] 구대표집사봇(H&I) — 기획서(기획서.md) §5·§7과 채널 ID·용어 정렬
- * - 캘린더: Asia/Seoul 당일 경계(timeMin/timeMax) + 오늘/내일/어제 키워드 반영
- * - management_channels ↔ Slack: #cmm-cxo, #cmm-영업지원, #noti-업무일정
+ * [v15.6] 구대표집사봇(H&I) — 기획서(기획서.md) §5·§7과 채널 ID·용어 정렬
+ * - 캘린더: 일정 제목·시간(시작~종료)·주최/참석자(이메일→이름)·마크다운 정규화 + 요약 지침
  */
 
 import crypto from 'crypto';
@@ -104,6 +103,54 @@ function resolveEmailsInText(text) {
     if (email) processedText = processedText.replace(new RegExp(email, 'gi'), name);
   });
   return processedText;
+}
+
+function memberNameFromEmail(email) {
+  if (!email) return null;
+  const lower = String(email).toLowerCase();
+  const found = Object.entries(HNI.members).find(([, v]) => (v.email || '').toLowerCase() === lower);
+  return found ? found[0] : null;
+}
+
+function formatCalendarEventTimeRange(ev) {
+  const timeOpts = { timeZone: 'Asia/Seoul', hour: '2-digit', minute: '2-digit', hour12: false };
+  if (ev.start?.date && !ev.start?.dateTime) {
+    const endNote = ev.end?.date ? ` (종료일 ${ev.end.date})` : '';
+    return `종일 (${ev.start.date})${endNote}`;
+  }
+  const s = ev.start?.dateTime;
+  const e = ev.end?.dateTime;
+  if (!s) return '시간 미정';
+  const sStr = new Date(s).toLocaleString('ko-KR', timeOpts);
+  const eStr = e ? new Date(e).toLocaleString('ko-KR', timeOpts) : '';
+  return eStr ? `${sStr} ~ ${eStr}` : sStr;
+}
+
+function buildCalendarPeopleLine(ev) {
+  const bits = [];
+  const orgEmail = ev.organizer?.email;
+  if (orgEmail) {
+    bits.push(`주최: ${memberNameFromEmail(orgEmail) || ev.organizer.displayName || orgEmail}`);
+  }
+  const others = (ev.attendees || [])
+    .filter(a => a.responseStatus !== 'declined')
+    .filter(a => !a.organizer)
+    .map(a => memberNameFromEmail(a.email) || a.displayName || a.email)
+    .filter(Boolean);
+  const unique = [...new Set(others)];
+  if (unique.length) bits.push(`참석·게스트: ${unique.join(', ')}`);
+  return bits.length ? bits.join(' | ') : '';
+}
+
+/** Gemini/슬랙 답변용 — 일정명·시간·인원을 한눈에 */
+function formatCalendarEventsAsMarkdown(events) {
+  if (!events?.length) return '(해당일 Google Calendar API로 조회된 일정 없음 — Slack 알림만 참고하세요.)';
+  return events.map((ev, i) => {
+    const people = ev.peopleLine || '관련인원: API에 없음(제목·Slack #noti-업무일정 원문 확인)';
+    const loc = ev.location ? `\n   • 장소: ${ev.location}` : '';
+    const note = ev.descriptionSnippet ? `\n   • 비고: ${ev.descriptionSnippet}` : '';
+    return `${i + 1}. *${ev.title}*\n   • 시간: ${ev.time}${loc}\n   • ${people}${note}`;
+  }).join('\n\n');
 }
 
 /** Asia/Seoul 기준 달력 연·월·일 */
@@ -221,7 +268,17 @@ async function fetchCalendarEventsForKstDay(ymd) {
       return { error: `API Error ${res.status}${apiErr ? `: ${apiErr}` : ''}` };
     }
     if (data.error) return { error: apiErr || JSON.stringify(data.error) };
-    return { events: data.items?.map(ev => ({ title: ev.summary, time: ev.start.dateTime ? new Date(ev.start.dateTime).toLocaleTimeString('ko-KR', { timeZone: 'Asia/Seoul' }) : '종일', location: ev.location || '장소미지정' })) || [] };
+    const events = (data.items || []).map(ev => {
+      const desc = ev.description ? String(ev.description).replace(/\s+/g, ' ').trim() : '';
+      return {
+        title: (ev.summary && String(ev.summary).trim()) || '(제목 없음)',
+        time: formatCalendarEventTimeRange(ev),
+        location: ev.location ? String(ev.location).trim() : '',
+        peopleLine: buildCalendarPeopleLine(ev),
+        descriptionSnippet: desc ? desc.slice(0, 280) : ''
+      };
+    });
+    return { events };
   } catch (e) { return { error: e.message }; }
 }
 
@@ -283,10 +340,14 @@ async function handleBoss(text, channel, threadTs, env) {
             if (apiResult.error) {
               const detail = apiResult.detail ? `\n상세: ${apiResult.detail}` : '';
               rawData = `[⚠️ API 연동 에러]\n사유: ${apiResult.error}\n진단: ${apiResult.diagnostics || '없음'}${detail}\n\n`;
-            } else rawData = `[1. 구글 캘린더 직접 데이터] 조회일(KST): ${reportContextDate}\n${JSON.stringify(apiResult.events)}\n\n`;
+            } else {
+              const md = formatCalendarEventsAsMarkdown(apiResult.events);
+              rawData = `[1. 구글 캘린더 API — 반드시 아래 각 줄을 답변에 반영, 캘린더 이름만 쓰지 말 것]\n조회일(KST): ${reportContextDate}\n\n${md}\n\n[동일 데이터 JSON]\n${JSON.stringify(apiResult.events)}\n\n`;
+            }
           }
 
-          const historyRes = await slackApi('conversations.history', { channel: targetChannel.id, limit: 100 }, env.BOT_TOKEN);
+          const historyLimit = args.category === 'calendar' ? 150 : 100;
+          const historyRes = await slackApi('conversations.history', { channel: targetChannel.id, limit: historyLimit }, env.BOT_TOKEN);
           if (historyRes.ok) {
             const context = historyRes.messages.reverse().map(m => `[발신:${Object.keys(HNI.members).find(k=>HNI.members[k].id===m.user)||m.user}] ${resolveEmailsInText(m.text)}`).join('\n\n');
             rawData += `[#${targetChannel.name} 채널 데이터]\n${context}`;
@@ -294,13 +355,16 @@ async function handleBoss(text, channel, threadTs, env) {
             rawData += `[#${targetChannel.name} 채널] 히스토리 조회 실패: ${historyRes.error || 'unknown'}`;
           }
 
+          const calendarReplyRules = args.category === 'calendar'
+            ? `[일정 답변 규칙 — 필수]\n- "hnin", "hni 출장" 같은 캘린더(계정) 이름만 bullet로 나열하지 마세요.\n- 각 일정마다: 제목 전체([출장][외근][회의] 등 포함), 시간(시작~종료 KST), 관련 인원(주최·참석·게스트, 이메일은 이름으로).\n- Google API 목록과 Slack #noti-업무일정 원문을 합쳐 빠짐없이 정리. 원문에만 있는 일정도 동일 형식으로 추가.\n- 겹치는 시간대는 항목을 나누어 모두 표기.\n`
+            : '';
           const summaryRes = await fetch(url, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
               contents: [
                 { role: 'user', parts: [{ text: `지시: ${text}\n타겟날짜·맥락: ${reportContextDate}\n전체 데이터:\n${rawData}` }] },
-                { role: 'user', parts: [{ text: `위 데이터를 분석하여 보고하세요.` }] }
+                { role: 'user', parts: [{ text: calendarReplyRules + (args.category === 'calendar' ? '위 규칙과 데이터를 따른 일정 브리핑을 작성하세요.' : '위 데이터를 분석하여 보고하세요.') }] }
               ]
             })
           });
