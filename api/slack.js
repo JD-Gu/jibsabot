@@ -1,6 +1,6 @@
 /**
- * [v15.6] 구대표집사봇(H&I) — 기획서(기획서.md) §5·§7과 채널 ID·용어 정렬
- * - 캘린더: 일정 제목·시간(시작~종료)·주최/참석자(이메일→이름)·마크다운 정규화 + 요약 지침
+ * [v15.7] 구대표집사봇(H&I) — 기획서(기획서.md) §5·§7과 채널 ID·용어 정렬
+ * - #noti-업무일정: Google→Slack 알림 형식(Calendar: 구분명 + 시간줄) 구조 파싱 후 최우선 반영
  */
 
 import crypto from 'crypto';
@@ -151,6 +151,112 @@ function formatCalendarEventsAsMarkdown(events) {
     const note = ev.descriptionSnippet ? `\n   • 비고: ${ev.descriptionSnippet}` : '';
     return `${i + 1}. *${ev.title}*\n   • 시간: ${ev.time}${loc}\n   • ${people}${note}`;
   }).join('\n\n');
+}
+
+const MONTH_NAMES_EN = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+
+function messageMentionsKstDate(text, ymd) {
+  if (!text) return false;
+  const { y, m, d } = ymd;
+  const pad = (n) => String(n).padStart(2, '0');
+  const tests = [
+    new RegExp(`${y}년\\s*${m}월\\s*${d}일`),
+    new RegExp(`${y}[./]\\s*${pad(m)}[./]\\s*${pad(d)}\\b`),
+    new RegExp(`\\b${MONTH_NAMES_EN[m - 1]}\\s+0?${d},\\s*${y}\\b`, 'i'),
+    new RegExp(`(?:^|\\D)${m}월\\s*0?${d}일(?:\\D|$)`)
+  ];
+  return tests.some((r) => r.test(text));
+}
+
+function messageMatchesCalendarDay(message, ymd) {
+  const t = message?.text || '';
+  if (messageMentionsKstDate(t, ymd)) return true;
+  const ts = message?.ts;
+  if (!ts) return false;
+  const posted = getKstYmd(new Date(Math.floor(Number(ts) * 1000)));
+  if (posted.y !== ymd.y || posted.m !== ymd.m || posted.d !== ymd.d) return false;
+  if ((/\bToday\b|오늘의|오늘\s/i).test(t) && /calendar\s*:|캘린더\s*:|일정|Google|구글|\[외근\]|\[출장\]|\[회의\]/i.test(t)) return true;
+  if (/Calendar\s*:|캘린더\s*:/i.test(t)) return true;
+  return false;
+}
+
+function slackPlainForParse(t) {
+  return (t || '').replace(/\*+/g, '').replace(/`/g, '').replace(/_{1,2}/g, '').trim();
+}
+
+/** Slack에 게시된 Google Calendar 알림: "Calendar: hnin" 다음 줄들이 실제 일정 */
+function parseCalendarStructuredFromSlack(rawText) {
+  const events = [];
+  if (!rawText) return events;
+  let currentCal = '';
+  const calHeader = /^(?:Calendar|캘린더)\s*[:：]\s*`?([^`\n]+?)`?\s*$/i;
+
+  for (const raw of rawText.split(/\r?\n/)) {
+    const line = raw.trim();
+    if (!line) continue;
+
+    const ch = line.match(calHeader);
+    if (ch) {
+      currentCal = ch[1].trim();
+      continue;
+    }
+
+    const timed = line.match(
+      /^[\s*•◇▪︎\-\u2022]*((?:(?:오전|오후)\s*)?\d{1,2}:\d{2}(?:\s*(?:AM|PM))?(?:\s*[-–~]\s*(?:(?:오전|오후)\s*)?\d{1,2}:\d{2}(?:\s*(?:AM|PM))?)?)\s+(.+)$/
+    );
+    if (timed && timed[2] && timed[2].length > 2) {
+      events.push({
+        calendar: currentCal || '—',
+        time: timed[1].replace(/\s+/g, ' ').trim(),
+        title: timed[2].trim()
+      });
+      continue;
+    }
+
+    if (/^\[(?:출장|외근|회의|연차|오후 반차)\]/.test(line) && line.length > 5) {
+      events.push({
+        calendar: currentCal || '—',
+        time: '종일·시각은 같은 메시지 When/상단 블록 참고',
+        title: line.replace(/^[\s*•◇▪︎\-\u2022]+/, '').trim()
+      });
+    }
+  }
+  return events;
+}
+
+function dedupeParsedSlackEvents(list) {
+  const seen = new Set();
+  return list.filter((e) => {
+    const k = `${e.time}|${e.title}|${e.calendar}`;
+    if (seen.has(k)) return false;
+    seen.add(k);
+    return true;
+  });
+}
+
+function formatSlackParsedCalendarMarkdown(events) {
+  if (!events.length) {
+    return '(해당일 조건의 #noti-업무일정 메시지에서 "시간 + 제목" 줄을 추출하지 못함 — 하단 원문 채널 로그 확인)';
+  }
+  return events
+    .map((e, i) => {
+      const calNote = e.calendar && e.calendar !== '—' ? `\n   • 캘린더 구분(일정 제목 아님): ${e.calendar}` : '';
+      return `${i + 1}. *${e.title}*\n   • 시간: ${e.time}${calNote}`;
+    })
+    .join('\n\n');
+}
+
+function isApiCalendarShellEvent(ev) {
+  const t = (ev.title || '').trim().replace(/\s+/g, ' ');
+  if (!t || t === '(제목 없음)') return false;
+  if (/^hnin$/i.test(t)) return true;
+  if (/^hni\s*출장$/i.test(t)) return true;
+  return false;
+}
+
+function apiEventsAreOnlyCalendarShells(events) {
+  if (!events?.length) return false;
+  return events.every((ev) => isApiCalendarShellEvent(ev));
 }
 
 /** Asia/Seoul 기준 달력 연·월·일 */
@@ -332,31 +438,52 @@ async function handleBoss(text, channel, threadTs, env) {
           }
 
           let reportContextDate = nowKST;
+          let ymdCalendar = null;
           if (args.category === 'calendar') {
-            const ymd = resolveCalendarKstYmd(text, args.query);
-            reportContextDate = formatKstYmdLong(ymd);
+            ymdCalendar = resolveCalendarKstYmd(text, args.query);
+            reportContextDate = formatKstYmdLong(ymdCalendar);
             console.log(`[BOSS] Calendar KST day: ${reportContextDate} (query=${args.query || ''})`);
-            const apiResult = await fetchCalendarEventsForKstDay(ymd);
-            if (apiResult.error) {
-              const detail = apiResult.detail ? `\n상세: ${apiResult.detail}` : '';
-              rawData = `[⚠️ API 연동 에러]\n사유: ${apiResult.error}\n진단: ${apiResult.diagnostics || '없음'}${detail}\n\n`;
-            } else {
-              const md = formatCalendarEventsAsMarkdown(apiResult.events);
-              rawData = `[1. 구글 캘린더 API — 반드시 아래 각 줄을 답변에 반영, 캘린더 이름만 쓰지 말 것]\n조회일(KST): ${reportContextDate}\n\n${md}\n\n[동일 데이터 JSON]\n${JSON.stringify(apiResult.events)}\n\n`;
-            }
           }
 
           const historyLimit = args.category === 'calendar' ? 150 : 100;
           const historyRes = await slackApi('conversations.history', { channel: targetChannel.id, limit: historyLimit }, env.BOT_TOKEN);
+
+          let slackParsedBlock = '';
+          if (args.category === 'calendar' && historyRes.ok && ymdCalendar) {
+            const matched = (historyRes.messages || []).filter((m) => messageMatchesCalendarDay(m, ymdCalendar));
+            const parsedFlat = [];
+            for (const m of matched) {
+              const plain = slackPlainForParse(resolveEmailsInText(m.text || ''));
+              parsedFlat.push(...parseCalendarStructuredFromSlack(plain));
+            }
+            const deduped = dedupeParsedSlackEvents(parsedFlat);
+            slackParsedBlock = formatSlackParsedCalendarMarkdown(deduped);
+            console.log(`[BOSS] Slack calendar lines parsed: ${deduped.length} (from ${matched.length} messages)`);
+          }
+
+          if (args.category === 'calendar') {
+            const apiResult = await fetchCalendarEventsForKstDay(ymdCalendar);
+            if (apiResult.error) {
+              const detail = apiResult.detail ? `\n상세: ${apiResult.detail}` : '';
+              rawData = `[0. Slack #noti-업무일정 — 구조 파싱(최우선, Calendar: 는 구분명)]\n${slackParsedBlock}\n\n[⚠️ Google Calendar API]\n사유: ${apiResult.error}\n진단: ${apiResult.diagnostics || '없음'}${detail}\n\n`;
+            } else {
+              const shellOnly = apiEventsAreOnlyCalendarShells(apiResult.events);
+              const apiMd = shellOnly
+                ? `※ API 응답이 캘린더 표시명(hnin·hni 출장 등) 위주입니다. 일정명·시간은 [0]과 채널 원문을 우선하세요.\n\n${formatCalendarEventsAsMarkdown(apiResult.events)}`
+                : formatCalendarEventsAsMarkdown(apiResult.events);
+              rawData = `[0. Slack #noti-업무일정 — 구조 파싱(최우선)]\n${slackParsedBlock}\n\n[1. Google Calendar API] 조회일(KST): ${reportContextDate}\n${apiMd}\n\n[JSON]\n${JSON.stringify(apiResult.events)}\n\n`;
+            }
+          }
+
           if (historyRes.ok) {
             const context = historyRes.messages.reverse().map(m => `[발신:${Object.keys(HNI.members).find(k=>HNI.members[k].id===m.user)||m.user}] ${resolveEmailsInText(m.text)}`).join('\n\n');
-            rawData += `[#${targetChannel.name} 채널 데이터]\n${context}`;
+            rawData += `[#${targetChannel.name} 채널 원문 전체]\n${context}`;
           } else {
             rawData += `[#${targetChannel.name} 채널] 히스토리 조회 실패: ${historyRes.error || 'unknown'}`;
           }
 
           const calendarReplyRules = args.category === 'calendar'
-            ? `[일정 답변 규칙 — 필수]\n- "hnin", "hni 출장" 같은 캘린더(계정) 이름만 bullet로 나열하지 마세요.\n- 각 일정마다: 제목 전체([출장][외근][회의] 등 포함), 시간(시작~종료 KST), 관련 인원(주최·참석·게스트, 이메일은 이름으로).\n- Google API 목록과 Slack #noti-업무일정 원문을 합쳐 빠짐없이 정리. 원문에만 있는 일정도 동일 형식으로 추가.\n- 겹치는 시간대는 항목을 나누어 모두 표기.\n`
+            ? `[일정 답변 규칙 — 필수]\n- 각 일정의 **제목·시간**은 먼저 [0. Slack 구조 파싱]과 같아야 합니다. 파싱이 비어 있으면 채널 원문에서 [외근][출장] 포함 **전체 제목**과 시각을 추출하세요.\n- "hnin", "hni 출장"은 Google 알림의 **Calendar: (캘린더 구분)** 일 뿐이며 일정 제목으로 쓰지 마세요.\n- 제목 괄호·담당자(예: ○○ 책임)·게스트 표기는 원문에서 유지하세요. API만 믿지 말 것.\n`
             : '';
           const summaryRes = await fetch(url, {
             method: 'POST',

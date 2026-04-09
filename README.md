@@ -6,7 +6,7 @@
 
 - **[기획서.md](./기획서.md)** — 4대 역할·채널 35개 매핑·권한·로드맵·**현재 구현 대비** 정리
 
-## 구현 개요 (v15.6)
+## 구현 개요 (v15.7)
 
 - `api/slack.js`: Slack Events 수신 → 서명 검증 → `BOSS_USER_ID` 일치 시 Gemini + `report_management_status`(`#cmm-cxo`, `#cmm-영업지원`, `#noti-업무일정`) / `send_message`
 - Google Calendar: 서비스 계정 JWT **읽기 전용**
