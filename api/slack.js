@@ -1,7 +1,7 @@
 /**
- * [v15.4] 구대표집사봇(H&I) — 기획서(기획서.md) §5·§7과 채널 ID·용어 정렬
- * - management_channels ↔ Slack 실채널명: #cmm-cxo, #cmm-영업지원, #noti-업무일정
- * - Google Calendar API(JWT 읽기전용), Gemini 2.5 Flash, Slack 서명 검증·로깅
+ * [v15.5] 구대표집사봇(H&I) — 기획서(기획서.md) §5·§7과 채널 ID·용어 정렬
+ * - 캘린더: Asia/Seoul 당일 경계(timeMin/timeMax) + 오늘/내일/어제 키워드 반영
+ * - management_channels ↔ Slack: #cmm-cxo, #cmm-영업지원, #noti-업무일정
  */
 
 import crypto from 'crypto';
@@ -47,7 +47,7 @@ const GEMINI_TOOLS = [{
         type: 'OBJECT',
         properties: {
           category: { type: 'STRING', enum: ['finance', 'sales', 'calendar'], description: 'finance|sales|calendar' },
-          query: { type: 'STRING', description: '검색 날짜 또는 키워드' }
+          query: { type: 'STRING', description: 'calendar일 때: 오늘/내일/어제/모레 또는 YYYY-MM-DD. 일정 질문이면 대표 발화와 동일하게(예: 오늘 일정 → 오늘).' }
         },
         required: ['category']
       }
@@ -106,6 +106,51 @@ function resolveEmailsInText(text) {
   return processedText;
 }
 
+/** Asia/Seoul 기준 달력 연·월·일 */
+function getKstYmd(anchorDate = new Date()) {
+  const s = anchorDate.toLocaleDateString('en-CA', { timeZone: 'Asia/Seoul' });
+  const [y, m, d] = s.split('-').map(Number);
+  return { y, m, d };
+}
+
+function addDaysToKstYmd({ y, m, d }, deltaDays) {
+  const pad = (n) => String(n).padStart(2, '0');
+  const noon = new Date(`${y}-${pad(m)}-${pad(d)}T12:00:00+09:00`);
+  noon.setTime(noon.getTime() + deltaDays * 86400000);
+  return getKstYmd(noon);
+}
+
+function kstYmdToIsoRange({ y, m, d }) {
+  const pad = (n) => String(n).padStart(2, '0');
+  return {
+    timeMin: new Date(`${y}-${pad(m)}-${pad(d)}T00:00:00+09:00`).toISOString(),
+    timeMax: new Date(`${y}-${pad(m)}-${pad(d)}T23:59:59.999+09:00`).toISOString()
+  };
+}
+
+function formatKstYmdLong({ y, m, d }) {
+  const pad = (n) => String(n).padStart(2, '0');
+  const dt = new Date(`${y}-${pad(m)}-${pad(d)}T12:00:00+09:00`);
+  return dt.toLocaleString('ko-KR', { timeZone: 'Asia/Seoul', year: 'numeric', month: 'long', day: 'numeric', weekday: 'long' });
+}
+
+/** 대표 발화 + tool query로 캘린더 조회일(KST) 결정. 명시 없으면 오늘(KST). */
+function resolveCalendarKstYmd(userText, toolQuery) {
+  const q = `${userText || ''} ${toolQuery || ''}`.trim().toLowerCase();
+  const iso = q.match(/\b(20\d{2})-(\d{1,2})-(\d{1,2})\b/);
+  if (iso) {
+    const y = +iso[1], m = +iso[2], d = +iso[3];
+    if (m >= 1 && m <= 12 && d >= 1 && d <= 31) return { y, m, d };
+  }
+  const base = getKstYmd();
+  let delta = 0;
+  if (/모레|글픈날|글피/.test(q)) delta = 2;
+  else if (/내일|명일|tomorrow/.test(q)) delta = 1;
+  else if (/어제|yesterday/.test(q)) delta = -1;
+  else if (/오늘|금일|당일|today/.test(q)) delta = 0;
+  return addDaysToKstYmd(base, delta);
+}
+
 // ─── [3] 구글 정식 인증 및 데이터 엔진 ────────────────────────
 
 async function getGoogleAccessToken() {
@@ -156,27 +201,27 @@ async function getAccessibleCalendars(token) {
   } catch (e) { return []; }
 }
 
-async function fetchCalendarEventsDirectly(queryDate) {
+async function fetchCalendarEventsForKstDay(ymd) {
   const auth = await getGoogleAccessToken();
   if (auth.error) return { error: auth.error };
 
   const calendarId = HNI.knowledge.googleCalendarId;
-  const start = new Date(queryDate); start.setHours(0, 0, 0, 0);
-  const end = new Date(queryDate); end.setHours(23, 59, 59, 999);
+  const { timeMin, timeMax } = kstYmdToIsoRange(ymd);
+  const url = `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calendarId)}/events?timeMin=${encodeURIComponent(timeMin)}&timeMax=${encodeURIComponent(timeMax)}&singleEvents=true&orderBy=startTime`;
 
-  const url = `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calendarId)}/events?timeMin=${start.toISOString()}&timeMax=${end.toISOString()}&singleEvents=true&orderBy=startTime`;
-  
   try {
     const res = await fetch(url, { headers: { 'Authorization': `Bearer ${auth.token}` } });
     const data = await res.json();
+    const apiErr = data?.error?.message || (typeof data?.error === 'string' ? data.error : '');
     if (!res.ok) {
       if (res.status === 404) {
         const list = await getAccessibleCalendars(auth.token);
-        return { error: `404 Not Found`, diagnostics: `접근 가능 목록: ${list.join(', ') || '없음'}` };
+        return { error: `404 Not Found`, diagnostics: `접근 가능 목록: ${list.join(', ') || '없음'}`, detail: apiErr };
       }
-      return { error: `API Error ${res.status}` };
+      return { error: `API Error ${res.status}${apiErr ? `: ${apiErr}` : ''}` };
     }
-    return { events: data.items?.map(ev => ({ title: ev.summary, time: ev.start.dateTime ? new Date(ev.start.dateTime).toLocaleTimeString('ko-KR') : "종일", location: ev.location || "장소미지정" })) || [] };
+    if (data.error) return { error: apiErr || JSON.stringify(data.error) };
+    return { events: data.items?.map(ev => ({ title: ev.summary, time: ev.start.dateTime ? new Date(ev.start.dateTime).toLocaleTimeString('ko-KR', { timeZone: 'Asia/Seoul' }) : '종일', location: ev.location || '장소미지정' })) || [] };
   } catch (e) { return { error: e.message }; }
 }
 
@@ -186,8 +231,6 @@ async function handleBoss(text, channel, threadTs, env) {
   const now = new Date();
   const optionsKST = { timeZone: 'Asia/Seoul', year: 'numeric', month: 'long', day: 'numeric', weekday: 'long' };
   const nowKST = now.toLocaleString('ko-KR', optionsKST);
-  const tomorrow = new Date(now); tomorrow.setDate(tomorrow.getDate() + 1);
-  const tomorrowKST = tomorrow.toLocaleString('ko-KR', optionsKST);
 
   console.log(`[BOSS] Processing: "${text}" at ${nowKST}`);
 
@@ -196,7 +239,7 @@ async function handleBoss(text, channel, threadTs, env) {
   [미션] 대표님 질의에 맞게 report_management_status 도구로 분야를 선택하세요.
   1. 경영·CXO 보고 맥락: Slack #cmm-cxo (도구 키 finance)
   2. 영업 지원 맥락: Slack #cmm-영업지원 (도구 키 sales)
-  3. 업무 일정: Google Calendar(읽기) + Slack #noti-업무일정 히스토리 (도구 키 calendar)
+  3. 업무 일정: Google Calendar(읽기) + Slack #noti-업무일정 히스토리 (도구 키 calendar). calendar 호출 시 반드시 query에 조회일을 넣으세요(오늘/내일/어제 또는 YYYY-MM-DD). "오늘 일정"이면 query=오늘.
   권장 명령 채널(기획): #jj-프롬프트 — 다른 채널·DM에서 멘션해도 동일하게 동작합니다.`;
 
   const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${env.GEMINI_KEY}`;
@@ -231,10 +274,16 @@ async function handleBoss(text, channel, threadTs, env) {
             continue;
           }
 
+          let reportContextDate = nowKST;
           if (args.category === 'calendar') {
-            const apiResult = await fetchCalendarEventsDirectly(tomorrow);
-            if (apiResult.error) rawData = `[⚠️ API 연동 에러]\n사유: ${apiResult.error}\n진단: ${apiResult.diagnostics || '없음'}\n\n`;
-            else rawData = `[1. 구글 캘린더 직접 데이터]\n${JSON.stringify(apiResult.events)}\n\n`;
+            const ymd = resolveCalendarKstYmd(text, args.query);
+            reportContextDate = formatKstYmdLong(ymd);
+            console.log(`[BOSS] Calendar KST day: ${reportContextDate} (query=${args.query || ''})`);
+            const apiResult = await fetchCalendarEventsForKstDay(ymd);
+            if (apiResult.error) {
+              const detail = apiResult.detail ? `\n상세: ${apiResult.detail}` : '';
+              rawData = `[⚠️ API 연동 에러]\n사유: ${apiResult.error}\n진단: ${apiResult.diagnostics || '없음'}${detail}\n\n`;
+            } else rawData = `[1. 구글 캘린더 직접 데이터] 조회일(KST): ${reportContextDate}\n${JSON.stringify(apiResult.events)}\n\n`;
           }
 
           const historyRes = await slackApi('conversations.history', { channel: targetChannel.id, limit: 100 }, env.BOT_TOKEN);
@@ -250,7 +299,7 @@ async function handleBoss(text, channel, threadTs, env) {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
               contents: [
-                { role: 'user', parts: [{ text: `지시: ${text}\n타겟날짜: ${tomorrowKST}\n전체 데이터:\n${rawData}` }] },
+                { role: 'user', parts: [{ text: `지시: ${text}\n타겟날짜·맥락: ${reportContextDate}\n전체 데이터:\n${rawData}` }] },
                 { role: 'user', parts: [{ text: `위 데이터를 분석하여 보고하세요.` }] }
               ]
             })
