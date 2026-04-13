@@ -704,6 +704,38 @@ async function handleBossThreadReply(text, channel, threadTs, env) {
 
 // ─── [9] handleBoss: 대표님 전용 통합 엔진 ──────────────────────────
 
+/** 채널 또는 스레드 최근 대화를 Gemini 멀티턴 contents 형식으로 변환 */
+async function buildConversationHistory(channel, threadTs, token, limit = 10) {
+  try {
+    let messages;
+    if (threadTs) {
+      // 스레드 내 대화
+      const res = await slackApi('conversations.replies', { channel, ts: threadTs, limit: limit + 1 }, token);
+      messages = (res.messages || []).slice(0, -1); // 마지막(현재 메시지) 제외
+    } else {
+      // 채널 최근 대화
+      const res = await slackApi('conversations.history', { channel, limit: limit + 1 }, token);
+      messages = (res.messages || []).reverse().slice(0, -1);
+    }
+
+    const contents = [];
+    for (const m of messages) {
+      const cleanText = (m.text || '').replace(/<@U[A-Z0-9]+>/g, '').trim();
+      if (!cleanText) continue;
+      const isBot = !!m.bot_id;
+      contents.push({
+        role: isBot ? 'model' : 'user',
+        parts: [{ text: cleanText }]
+      });
+    }
+    console.log(`[BOSS] 대화 히스토리 ${contents.length}턴 로드`);
+    return contents;
+  } catch (e) {
+    console.warn(`[BOSS] 히스토리 로드 실패: ${e.message}`);
+    return [];
+  }
+}
+
 async function handleBoss(text, channel, threadTs, env) {
   const nowKST = new Date().toLocaleString('ko-KR', {
     timeZone: 'Asia/Seoul', year: 'numeric', month: 'long', day: 'numeric', weekday: 'long'
@@ -715,6 +747,7 @@ async function handleBoss(text, channel, threadTs, env) {
   const systemPrompt =
     `당신은 ${HNI.knowledge.companyName} 구자덕 대표님의 수석 비서 '${HNI.knowledge.botName}'입니다.\n` +
     `현재 시각: ${nowKST}\n` +
+    `이전 대화 내용을 기억하고 맥락을 이어서 답변하세요.\n` +
     `[도구 선택 기준]\n` +
     `1. 경영·CXO 보고 맥락 → report_management_status(category=finance)\n` +
     `2. 영업지원 맥락 → report_management_status(category=sales)\n` +
@@ -723,12 +756,17 @@ async function handleBoss(text, channel, threadTs, env) {
     `5. 채널 업무현황 → summarize_all_channels(scope=all|management|department|...)\n` +
     `6. 특정 직원에게 전달 → send_message(name=이름, message=내용)`;
 
+  // 최근 대화 히스토리 로드 (최대 10턴)
+  const history = await buildConversationHistory(channel, threadTs, env.BOT_TOKEN, 10);
+  // 현재 메시지 추가
+  const contents = [...history, { role: 'user', parts: [{ text }] }];
+
   try {
     const response = await fetch(geminiUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        contents: [{ role: 'user', parts: [{ text }] }],
+        contents,
         system_instruction: { parts: [{ text: systemPrompt }] },
         tools: GEMINI_TOOLS
       })
