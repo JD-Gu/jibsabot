@@ -345,53 +345,113 @@ function resolveCalendarKstYmd(userText, toolQuery) {
 
 async function getGoogleAccessToken() {
   const clientEmail = process.env.GOOGLE_CLIENT_EMAIL?.trim();
-  const privateKey  = process.env.GOOGLE_PRIVATE_KEY?.replace(/\\n/g, '\n').trim();
-  if (!clientEmail || !privateKey) return { error: '인증 환경변수 누락' };
+  const rawKey      = process.env.GOOGLE_PRIVATE_KEY;
+  const privateKey  = rawKey?.replace(/\\n/g, '\n').trim();
+
+  console.log('[CAL:AUTH] 시작');
+  console.log(`[CAL:AUTH] GOOGLE_CLIENT_EMAIL: ${clientEmail ? `${clientEmail.slice(0, 10)}...` : '❌ 미설정'}`);
+  console.log(`[CAL:AUTH] GOOGLE_PRIVATE_KEY: ${rawKey ? `설정됨 (${rawKey.length}자, \\n포함=${rawKey.includes('\\n')}, 헤더=${rawKey.includes('BEGIN')?'있음':'❌없음'})` : '❌ 미설정'}`);
+
+  if (!clientEmail || !privateKey) {
+    console.error('[CAL:AUTH] ❌ 환경변수 누락으로 인증 불가');
+    return { error: '인증 환경변수 누락' };
+  }
+
   try {
-    const now     = Math.floor(Date.now() / 1000);
-    const header  = Buffer.from(JSON.stringify({ alg: 'RS256', typ: 'JWT' })).toString('base64url');
-    const claims  = Buffer.from(JSON.stringify({
+    const now    = Math.floor(Date.now() / 1000);
+    const header = Buffer.from(JSON.stringify({ alg: 'RS256', typ: 'JWT' })).toString('base64url');
+    const claims = Buffer.from(JSON.stringify({
       iss: clientEmail, scope: 'https://www.googleapis.com/auth/calendar.readonly',
       aud: 'https://oauth2.googleapis.com/token', exp: now + 3600, iat: now
     })).toString('base64url');
-    const sig = crypto.createSign('RSA-SHA256').update(`${header}.${claims}`).sign(privateKey, 'base64url');
-    const res = await fetch('https://oauth2.googleapis.com/token', {
+
+    let sig;
+    try {
+      sig = crypto.createSign('RSA-SHA256').update(`${header}.${claims}`).sign(privateKey, 'base64url');
+      console.log('[CAL:AUTH] JWT 서명 성공');
+    } catch (signErr) {
+      console.error(`[CAL:AUTH] ❌ JWT 서명 실패: ${signErr.message}`);
+      return { error: `JWT 서명 실패: ${signErr.message}` };
+    }
+
+    console.log('[CAL:AUTH] 토큰 요청 중 → oauth2.googleapis.com');
+    const res  = await fetch('https://oauth2.googleapis.com/token', {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body: new URLSearchParams({ grant_type: 'urn:ietf:params:oauth:grant-type:jwt-bearer', assertion: `${header}.${claims}.${sig}` })
     });
     const data = await res.json();
-    if (data.error) return { error: `JWT 인증 실패: ${data.error}` };
+
+    if (data.error) {
+      console.error(`[CAL:AUTH] ❌ 토큰 발급 실패: ${data.error} / ${data.error_description || ''}`);
+      return { error: `JWT 인증 실패: ${data.error} — ${data.error_description || ''}` };
+    }
+
+    console.log(`[CAL:AUTH] ✅ 토큰 발급 성공 (만료: ${data.expires_in}초 후)`);
     return { token: data.access_token };
-  } catch (e) { return { error: e.message }; }
+  } catch (e) {
+    console.error(`[CAL:AUTH] ❌ 예외: ${e.message}`);
+    return { error: e.message };
+  }
 }
 
 async function getAccessibleCalendars(token) {
   try {
-    const res = await fetch('https://www.googleapis.com/calendar/v3/users/me/calendarList', { headers: { Authorization: `Bearer ${token}` } });
+    console.log('[CAL:LIST] 접근 가능 캘린더 목록 조회 중...');
+    const res  = await fetch('https://www.googleapis.com/calendar/v3/users/me/calendarList', { headers: { Authorization: `Bearer ${token}` } });
     const data = await res.json();
-    return data.items?.map(c => c.id) || [];
-  } catch { return []; }
+    const ids  = data.items?.map(c => c.id) || [];
+    console.log(`[CAL:LIST] 접근 가능 캘린더 ${ids.length}개: ${ids.join(', ') || '없음'}`);
+    return ids;
+  } catch (e) {
+    console.error(`[CAL:LIST] ❌ 예외: ${e.message}`);
+    return [];
+  }
 }
 
 async function fetchCalendarEventsForKstDay(ymd) {
+  const { y, m, d } = ymd;
+  console.log(`[CAL:FETCH] 조회 시작 — KST ${y}-${String(m).padStart(2,'0')}-${String(d).padStart(2,'0')}`);
+
   const auth = await getGoogleAccessToken();
-  if (auth.error) return { error: auth.error };
+  if (auth.error) {
+    console.error(`[CAL:FETCH] ❌ 인증 실패로 조회 중단: ${auth.error}`);
+    return { error: auth.error };
+  }
+
   const { timeMin, timeMax } = kstYmdToIsoRange(ymd);
   const calendarId = HNI.knowledge.googleCalendarId;
   const url = `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calendarId)}/events?timeMin=${encodeURIComponent(timeMin)}&timeMax=${encodeURIComponent(timeMax)}&singleEvents=true&orderBy=startTime`;
+
+  console.log(`[CAL:FETCH] 캘린더 ID: ${calendarId}`);
+  console.log(`[CAL:FETCH] timeMin: ${timeMin}`);
+  console.log(`[CAL:FETCH] timeMax: ${timeMax}`);
+
   try {
     const res  = await fetch(url, { headers: { Authorization: `Bearer ${auth.token}` } });
     const data = await res.json();
     const apiErr = data?.error?.message || (typeof data?.error === 'string' ? data.error : '');
+
+    console.log(`[CAL:FETCH] HTTP ${res.status}`);
+
     if (!res.ok) {
+      console.error(`[CAL:FETCH] ❌ HTTP ${res.status}: ${apiErr}`);
       if (res.status === 404) {
         const list = await getAccessibleCalendars(auth.token);
         return { error: '404 Not Found', diagnostics: `접근 가능 목록: ${list.join(', ') || '없음'}`, detail: apiErr };
       }
+      if (res.status === 403) {
+        console.error('[CAL:FETCH] 403 원인: 서비스 계정에 캘린더 공유가 안 되어 있거나 Domain-Wide Delegation 미설정');
+        return { error: `403 권한 없음: 서비스 계정(${calendarId})이 이 캘린더에 접근할 수 없습니다. 구글 캘린더 공유 설정을 확인하세요.` };
+      }
       return { error: `API Error ${res.status}${apiErr ? `: ${apiErr}` : ''}` };
     }
-    if (data.error) return { error: apiErr || JSON.stringify(data.error) };
+
+    if (data.error) {
+      console.error(`[CAL:FETCH] ❌ API 오류: ${apiErr}`);
+      return { error: apiErr || JSON.stringify(data.error) };
+    }
+
     const events = (data.items || []).map(ev => ({
       title: (ev.summary && String(ev.summary).trim()) || '(제목 없음)',
       time:  formatCalendarEventTimeRange(ev),
@@ -399,8 +459,15 @@ async function fetchCalendarEventsForKstDay(ymd) {
       peopleLine: buildCalendarPeopleLine(ev),
       descriptionSnippet: ev.description ? String(ev.description).replace(/\s+/g, ' ').trim().slice(0, 280) : ''
     }));
+
+    console.log(`[CAL:FETCH] ✅ 이벤트 ${events.length}건 조회 완료`);
+    events.forEach((ev, i) => console.log(`[CAL:FETCH]   ${i+1}. "${ev.title}" / ${ev.time}`));
+
     return { events };
-  } catch (e) { return { error: e.message }; }
+  } catch (e) {
+    console.error(`[CAL:FETCH] ❌ 예외: ${e.message}`);
+    return { error: e.message };
+  }
 }
 
 // ─── [5] S3 뉴스 검색 (Gemini Google Search) ─────────────────────────
