@@ -215,10 +215,12 @@ function buildCalendarPeopleLine(ev) {
 function formatCalendarEventsAsMarkdown(events) {
   if (!events?.length) return '(해당일 Google Calendar API로 조회된 일정 없음 — Slack 알림만 참고하세요.)';
   return events.map((ev, i) => {
-    const people = ev.peopleLine || '관련인원: API에 없음';
-    const loc  = ev.location       ? `\n   • 장소: ${ev.location}`        : '';
-    const note = ev.descriptionSnippet ? `\n   • 비고: ${ev.descriptionSnippet}` : '';
-    return `${i + 1}. *${ev.title}*\n   • 시간: ${ev.time}${loc}\n   • ${people}${note}`;
+    const people  = ev.peopleLine || '';
+    const cal     = ev.calendarName ? `\n   • 캘린더: ${ev.calendarName}` : '';
+    const loc     = ev.location     ? `\n   • 장소: ${ev.location}`        : '';
+    const people_ = people          ? `\n   • ${people}`                   : '';
+    const note    = ev.descriptionSnippet ? `\n   • 비고: ${ev.descriptionSnippet}` : '';
+    return `${i + 1}. *${ev.title}*\n   • 시간: ${ev.time}${cal}${loc}${people_}${note}`;
   }).join('\n\n');
 }
 
@@ -425,79 +427,83 @@ async function getGoogleAccessToken() {
   }
 }
 
+/** 서비스 계정이 접근 가능한 캘린더 목록 (id + summary) 반환 */
 async function getAccessibleCalendars(token) {
   try {
     console.log('[CAL:LIST] 접근 가능 캘린더 목록 조회 중...');
     const res  = await fetch('https://www.googleapis.com/calendar/v3/users/me/calendarList', { headers: { Authorization: `Bearer ${token}` } });
     const data = await res.json();
-    const ids  = data.items?.map(c => c.id) || [];
-    console.log(`[CAL:LIST] 접근 가능 캘린더 ${ids.length}개: ${ids.join(', ') || '없음'}`);
-    return ids;
+    const items = (data.items || []).map(c => ({ id: c.id, name: c.summary || c.id }));
+    console.log(`[CAL:LIST] 접근 가능 캘린더 ${items.length}개: ${items.map(c => `${c.name}(${c.id})`).join(', ') || '없음'}`);
+    return items;
   } catch (e) {
     console.error(`[CAL:LIST] ❌ 예외: ${e.message}`);
     return [];
   }
 }
 
+/** 단일 캘린더에서 이벤트 조회 */
+async function fetchEventsFromOneCalendar(calendarId, calendarName, timeMin, timeMax, token) {
+  const url = `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calendarId)}/events?timeMin=${encodeURIComponent(timeMin)}&timeMax=${encodeURIComponent(timeMax)}&singleEvents=true&orderBy=startTime`;
+  try {
+    const res  = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+    const data = await res.json();
+    if (!res.ok || data.error) {
+      console.warn(`[CAL:FETCH] ⚠️ ${calendarName}: HTTP ${res.status} / ${data?.error?.message || ''}`);
+      return [];
+    }
+    return (data.items || []).map(ev => ({
+      calendarName,
+      title: (ev.summary && String(ev.summary).trim()) || '(제목 없음)',
+      time:  formatCalendarEventTimeRange(ev),
+      location: ev.location ? String(ev.location).trim() : '',
+      peopleLine: buildCalendarPeopleLine(ev),
+      descriptionSnippet: ev.description ? String(ev.description).replace(/\s+/g, ' ').trim().slice(0, 280) : '',
+      startRaw: ev.start?.dateTime || ev.start?.date || ''
+    }));
+  } catch (e) {
+    console.warn(`[CAL:FETCH] ⚠️ ${calendarName} 예외: ${e.message}`);
+    return [];
+  }
+}
+
+/** 접근 가능한 모든 조직 캘린더를 병렬 조회 후 시간순 정렬 합산 */
 async function fetchCalendarEventsForKstDay(ymd) {
   const { y, m, d } = ymd;
   console.log(`[CAL:FETCH] 조회 시작 — KST ${y}-${String(m).padStart(2,'0')}-${String(d).padStart(2,'0')}`);
 
   const auth = await getGoogleAccessToken();
   if (auth.error) {
-    console.error(`[CAL:FETCH] ❌ 인증 실패로 조회 중단: ${auth.error}`);
+    console.error(`[CAL:FETCH] ❌ 인증 실패: ${auth.error}`);
     return { error: auth.error };
   }
 
   const { timeMin, timeMax } = kstYmdToIsoRange(ymd);
-  const calendarId = HNI.knowledge.googleCalendarId;
-  const url = `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calendarId)}/events?timeMin=${encodeURIComponent(timeMin)}&timeMax=${encodeURIComponent(timeMax)}&singleEvents=true&orderBy=startTime`;
+  console.log(`[CAL:FETCH] timeMin: ${timeMin} / timeMax: ${timeMax}`);
 
-  console.log(`[CAL:FETCH] 캘린더 ID: ${calendarId}`);
-  console.log(`[CAL:FETCH] timeMin: ${timeMin}`);
-  console.log(`[CAL:FETCH] timeMax: ${timeMax}`);
+  // 접근 가능한 캘린더 목록 가져오기
+  const calList = await getAccessibleCalendars(auth.token);
 
-  try {
-    const res  = await fetch(url, { headers: { Authorization: `Bearer ${auth.token}` } });
-    const data = await res.json();
-    const apiErr = data?.error?.message || (typeof data?.error === 'string' ? data.error : '');
-
-    console.log(`[CAL:FETCH] HTTP ${res.status}`);
-
-    if (!res.ok) {
-      console.error(`[CAL:FETCH] ❌ HTTP ${res.status}: ${apiErr}`);
-      if (res.status === 404) {
-        const list = await getAccessibleCalendars(auth.token);
-        return { error: '404 Not Found', diagnostics: `접근 가능 목록: ${list.join(', ') || '없음'}`, detail: apiErr };
-      }
-      if (res.status === 403) {
-        console.error('[CAL:FETCH] 403 원인: 서비스 계정에 캘린더 공유가 안 되어 있거나 Domain-Wide Delegation 미설정');
-        return { error: `403 권한 없음: 서비스 계정(${calendarId})이 이 캘린더에 접근할 수 없습니다. 구글 캘린더 공유 설정을 확인하세요.` };
-      }
-      return { error: `API Error ${res.status}${apiErr ? `: ${apiErr}` : ''}` };
-    }
-
-    if (data.error) {
-      console.error(`[CAL:FETCH] ❌ API 오류: ${apiErr}`);
-      return { error: apiErr || JSON.stringify(data.error) };
-    }
-
-    const events = (data.items || []).map(ev => ({
-      title: (ev.summary && String(ev.summary).trim()) || '(제목 없음)',
-      time:  formatCalendarEventTimeRange(ev),
-      location: ev.location ? String(ev.location).trim() : '',
-      peopleLine: buildCalendarPeopleLine(ev),
-      descriptionSnippet: ev.description ? String(ev.description).replace(/\s+/g, ' ').trim().slice(0, 280) : ''
-    }));
-
-    console.log(`[CAL:FETCH] ✅ 이벤트 ${events.length}건 조회 완료`);
-    events.forEach((ev, i) => console.log(`[CAL:FETCH]   ${i+1}. "${ev.title}" / ${ev.time}`));
-
-    return { events };
-  } catch (e) {
-    console.error(`[CAL:FETCH] ❌ 예외: ${e.message}`);
-    return { error: e.message };
+  if (!calList.length) {
+    return { error: '접근 가능한 캘린더가 없습니다. 구글 캘린더에서 서비스 계정에 조직 캘린더들을 공유해 주세요.' };
   }
+
+  // 모든 캘린더 병렬 조회
+  const results = await Promise.all(
+    calList.map(c => fetchEventsFromOneCalendar(c.id, c.name, timeMin, timeMax, auth.token))
+  );
+
+  // 합산 후 시간순 정렬
+  const allEvents = results.flat().sort((a, b) => {
+    if (!a.startRaw) return 1;
+    if (!b.startRaw) return -1;
+    return a.startRaw.localeCompare(b.startRaw);
+  });
+
+  console.log(`[CAL:FETCH] ✅ 전체 ${calList.length}개 캘린더, 이벤트 ${allEvents.length}건`);
+  allEvents.forEach((ev, i) => console.log(`[CAL:FETCH]   ${i+1}. [${ev.calendarName}] "${ev.title}" / ${ev.time}`));
+
+  return { events: allEvents };
 }
 
 // ─── [5] S3 뉴스 검색 (Gemini Google Search) ─────────────────────────
