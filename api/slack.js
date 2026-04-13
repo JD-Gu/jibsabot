@@ -62,7 +62,15 @@ const HNI = {
       'ops-제품납품':    { name: 'ops-제품납품',    id: 'C065CMA6SUX', category: 'operations',  desc: '제품납품 현황' }
     },
 
-    googleCalendarId: (process.env.GOOGLE_CALENDAR_ID || '09jj@hni-gl.com').trim()
+    /** 조직 공유 캘린더 목록 — calendarList API 대신 직접 등록 */
+    orgCalendars: [
+      { id: 'admin@hni-gl.com',                                                                    name: 'Hni 공통' },
+      { id: 'c_1bebd3983ad1211bed6426b2c440bebda8062b2a1dd48d53d5f8c26da002a238@group.calendar.google.com', name: 'Hni 경영' },
+      { id: 'c_p7dogoupqjrpekeh4q02l7p0q4@group.calendar.google.com',                              name: 'CXO' },
+      { id: 'c_on22abkf7sv5012phc62dg6c5o@group.calendar.google.com',                              name: 'Hni 영업' },
+      { id: 'c_0b1933udcqu9docu0j2b5v6p1c@group.calendar.google.com',                              name: 'Hni 회의실' },
+      { id: 'c_npav0v4dsvfnhr09m0a74pr154@group.calendar.google.com',                              name: 'Hni 휴가' }
+    ]
   }
 };
 
@@ -427,20 +435,6 @@ async function getGoogleAccessToken() {
   }
 }
 
-/** 서비스 계정이 접근 가능한 캘린더 목록 (id + summary) 반환 */
-async function getAccessibleCalendars(token) {
-  try {
-    console.log('[CAL:LIST] 접근 가능 캘린더 목록 조회 중...');
-    const res  = await fetch('https://www.googleapis.com/calendar/v3/users/me/calendarList', { headers: { Authorization: `Bearer ${token}` } });
-    const data = await res.json();
-    const items = (data.items || []).map(c => ({ id: c.id, name: c.summary || c.id }));
-    console.log(`[CAL:LIST] 접근 가능 캘린더 ${items.length}개: ${items.map(c => `${c.name}(${c.id})`).join(', ') || '없음'}`);
-    return items;
-  } catch (e) {
-    console.error(`[CAL:LIST] ❌ 예외: ${e.message}`);
-    return [];
-  }
-}
 
 /** 단일 캘린더에서 이벤트 조회 */
 async function fetchEventsFromOneCalendar(calendarId, calendarName, timeMin, timeMax, token) {
@@ -481,12 +475,9 @@ async function fetchCalendarEventsForKstDay(ymd) {
   const { timeMin, timeMax } = kstYmdToIsoRange(ymd);
   console.log(`[CAL:FETCH] timeMin: ${timeMin} / timeMax: ${timeMax}`);
 
-  // 접근 가능한 캘린더 목록 가져오기
-  const calList = await getAccessibleCalendars(auth.token);
-
-  if (!calList.length) {
-    return { error: '접근 가능한 캘린더가 없습니다. 구글 캘린더에서 서비스 계정에 조직 캘린더들을 공유해 주세요.' };
-  }
+  // 조직 캘린더 목록 (직접 등록)
+  const calList = HNI.knowledge.orgCalendars;
+  console.log(`[CAL:FETCH] 조직 캘린더 ${calList.length}개 조회: ${calList.map(c => c.name).join(', ')}`);
 
   // 모든 캘린더 병렬 조회
   const results = await Promise.all(
