@@ -835,7 +835,24 @@ async function handleBoss(text, channel, threadTs, env) {
             }
           }
 
-          const calendarRules = '';
+          const calendarPrompt = args.category === 'calendar' ? `
+아래 데이터를 바탕으로 Slack 일정 브리핑을 작성하세요.
+
+[Slack 시각화 규칙 — 필수]
+• 첫 줄: 📅 *YYYY년 M월 D일 (요일) 일정 브리핑*
+• 일정을 아래 카테고리로 분류하고 이모지 헤더를 사용하세요:
+  - 🏖️ *휴가 / 반차* — 연차·반차·외근
+  - 🤝 *회의 / 미팅* — 회의실 예약, 미팅
+  - 📌 *업무 일정* — 출장, 기타 일정
+  - 🔔 *종일 일정* — 날짜만 있는 이벤트
+• 각 일정 형식:
+  > ⏰ HH:MM ~ HH:MM  |  *일정 제목*
+  > 👥 참석: 이름1, 이름2  (있을 때만)
+  > 📍 장소: 장소명  (있을 때만)
+• 같은 카테고리 내 시간순 정렬
+• 일정이 없는 카테고리는 생략
+• 마지막 줄: 이탤릭으로 한 줄 코멘트 (예: _오늘도 좋은 하루 되세요!_)
+` : '위 데이터를 분석하여 보고하세요.';
 
           const summaryRes = await fetch(geminiUrl, {
             method: 'POST',
@@ -843,7 +860,7 @@ async function handleBoss(text, channel, threadTs, env) {
             body: JSON.stringify({
               contents: [
                 { role: 'user', parts: [{ text: `지시: ${text}\n날짜·맥락: ${reportContextDate}\n전체 데이터:\n${rawData}` }] },
-                { role: 'user', parts: [{ text: calendarRules + (args.category === 'calendar' ? '위 규칙과 데이터를 따른 일정 브리핑을 작성하세요.' : '위 데이터를 분석하여 보고하세요.') }] }
+                { role: 'user', parts: [{ text: calendarPrompt }] }
               ]
             })
           });
