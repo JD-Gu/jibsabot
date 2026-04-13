@@ -350,10 +350,11 @@ function resolveCalendarKstYmd(userText, toolQuery) {
 function parsePrivateKey(raw) {
   if (!raw) return null;
   let key = raw
-    .replace(/\\n/g, '\n')   // literal \n → 실제 개행
-    .replace(/\\r/g, '')      // literal \r 제거
-    .replace(/\r\n/g, '\n')  // Windows CRLF → LF
-    .replace(/\r/g, '\n')    // 구형 Mac CR → LF
+    .replace(/^["']+|["']+$/g, '')  // 앞뒤 따옴표 제거 (Vercel 환경변수 감싸기 문제)
+    .replace(/\\n/g, '\n')           // literal \n → 실제 개행
+    .replace(/\\r/g, '')             // literal \r 제거
+    .replace(/\r\n/g, '\n')         // Windows CRLF → LF
+    .replace(/\r/g, '\n')           // 구형 Mac CR → LF
     .trim();
 
   // PEM 헤더/푸터 사이 본문에 개행이 없으면 64자 단위로 강제 삽입
