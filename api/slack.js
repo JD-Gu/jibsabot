@@ -232,82 +232,6 @@ function formatCalendarEventsAsMarkdown(events) {
   }).join('\n\n');
 }
 
-const MONTH_NAMES_EN = ['January','February','March','April','May','June','July','August','September','October','November','December'];
-
-function messageMentionsKstDate(text, { y, m, d }) {
-  if (!text) return false;
-  const pad = n => String(n).padStart(2, '0');
-  return [
-    new RegExp(`${y}년\\s*${m}월\\s*${d}일`),
-    new RegExp(`${y}[./]\\s*${pad(m)}[./]\\s*${pad(d)}\\b`),
-    new RegExp(`\\b${MONTH_NAMES_EN[m - 1]}\\s+0?${d},\\s*${y}\\b`, 'i'),
-    new RegExp(`(?:^|\\D)${m}월\\s*0?${d}일(?:\\D|$)`)
-  ].some(r => r.test(text));
-}
-
-function messageMatchesCalendarDay(message, ymd) {
-  const t = message?.text || '';
-  if (messageMentionsKstDate(t, ymd)) return true;
-  const ts = message?.ts;
-  if (!ts) return false;
-  const posted = getKstYmd(new Date(Math.floor(Number(ts) * 1000)));
-  if (posted.y !== ymd.y || posted.m !== ymd.m || posted.d !== ymd.d) return false;
-  if ((/\bToday\b|오늘의|오늘\s/i).test(t) && /calendar\s*:|캘린더\s*:|일정|Google|구글|\[외근\]|\[출장\]|\[회의\]/i.test(t)) return true;
-  if (/Calendar\s*:|캘린더\s*:/i.test(t)) return true;
-  return false;
-}
-
-function slackPlainForParse(t) {
-  return (t || '').replace(/\*+/g, '').replace(/`/g, '').replace(/_{1,2}/g, '').trim();
-}
-
-function parseCalendarStructuredFromSlack(rawText) {
-  const events = [];
-  if (!rawText) return events;
-  let currentCal = '';
-  const calHeader = /^(?:Calendar|캘린더)\s*[:：]\s*`?([^`\n]+?)`?\s*$/i;
-  for (const raw of rawText.split(/\r?\n/)) {
-    const line = raw.trim();
-    if (!line) continue;
-    const ch = line.match(calHeader);
-    if (ch) { currentCal = ch[1].trim(); continue; }
-    const timed = line.match(/^[\s*•◇▪︎\-\u2022]*((?:(?:오전|오후)\s*)?\d{1,2}:\d{2}(?:\s*(?:AM|PM))?(?:\s*[-–~]\s*(?:(?:오전|오후)\s*)?\d{1,2}:\d{2}(?:\s*(?:AM|PM))?)?)\s+(.+)$/);
-    if (timed && timed[2]?.length > 2) {
-      events.push({ calendar: currentCal || '—', time: timed[1].replace(/\s+/g, ' ').trim(), title: timed[2].trim() });
-      continue;
-    }
-    if (/^\[(?:출장|외근|회의|연차|오후 반차)\]/.test(line) && line.length > 5) {
-      events.push({ calendar: currentCal || '—', time: '종일·시각은 같은 메시지 참고', title: line.replace(/^[\s*•◇▪︎\-\u2022]+/, '').trim() });
-    }
-  }
-  return events;
-}
-
-function dedupeParsedSlackEvents(list) {
-  const seen = new Set();
-  return list.filter(e => {
-    const k = `${e.time}|${e.title}|${e.calendar}`;
-    if (seen.has(k)) return false;
-    seen.add(k); return true;
-  });
-}
-
-function formatSlackParsedCalendarMarkdown(events) {
-  if (!events.length) return '(해당일 #noti-업무일정 메시지에서 일정을 추출하지 못함 — 채널 원문 확인)';
-  return events.map((e, i) => {
-    const calNote = e.calendar && e.calendar !== '—' ? `\n   • 캘린더 구분: ${e.calendar}` : '';
-    return `${i + 1}. *${e.title}*\n   • 시간: ${e.time}${calNote}`;
-  }).join('\n\n');
-}
-
-function isApiCalendarShellEvent(ev) {
-  const t = (ev.title || '').trim().replace(/\s+/g, ' ');
-  return /^hnin$/i.test(t) || /^hni\s*출장$/i.test(t);
-}
-
-function apiEventsAreOnlyCalendarShells(events) {
-  return !!events?.length && events.every(isApiCalendarShellEvent);
-}
 
 function getKstYmd(anchorDate = new Date()) {
   const s = anchorDate.toLocaleDateString('en-CA', { timeZone: 'Asia/Seoul' });
@@ -892,46 +816,26 @@ async function handleBoss(text, channel, threadTs, env) {
             console.log(`[BOSS] Calendar KST: ${reportContextDate}`);
           }
 
-          const histLimit = args.category === 'calendar' ? 150 : 100;
-          const historyRes = await slackApi('conversations.history', { channel: targetChannel.id, limit: histLimit }, env.BOT_TOKEN);
-
-          let slackParsedBlock = '';
-          if (args.category === 'calendar' && historyRes.ok && ymdCalendar) {
-            const matched = (historyRes.messages || []).filter(m => messageMatchesCalendarDay(m, ymdCalendar));
-            const parsedFlat = [];
-            for (const m of matched) {
-              parsedFlat.push(...parseCalendarStructuredFromSlack(slackPlainForParse(resolveEmailsInText(m.text || ''))));
-            }
-            const deduped = dedupeParsedSlackEvents(parsedFlat);
-            slackParsedBlock = formatSlackParsedCalendarMarkdown(deduped);
-            console.log(`[BOSS] Slack parsed events: ${deduped.length}`);
-          }
-
           if (args.category === 'calendar') {
             const apiResult = await fetchCalendarEventsForKstDay(ymdCalendar);
             if (apiResult.error) {
-              rawData = `[0. Slack #noti-업무일정 구조 파싱(최우선)]\n${slackParsedBlock}\n\n[⚠️ Google Calendar API]\n사유: ${apiResult.error}\n진단: ${apiResult.diagnostics || '없음'}${apiResult.detail ? `\n상세: ${apiResult.detail}` : ''}\n\n`;
+              rawData = `[⚠️ Google Calendar API 오류]\n사유: ${apiResult.error}\n\n`;
             } else {
-              const shellOnly = apiEventsAreOnlyCalendarShells(apiResult.events);
-              const apiMd = shellOnly
-                ? `※ API 응답이 캘린더 표시명(hnin·hni 출장) 위주입니다. 일정명·시간은 [0]과 채널 원문을 우선하세요.\n\n${formatCalendarEventsAsMarkdown(apiResult.events)}`
-                : formatCalendarEventsAsMarkdown(apiResult.events);
-              rawData = `[0. Slack #noti-업무일정 구조 파싱(최우선)]\n${slackParsedBlock}\n\n[1. Google Calendar API] 조회일(KST): ${reportContextDate}\n${apiMd}\n\n[JSON]\n${JSON.stringify(apiResult.events)}\n\n`;
+              rawData = `[Google Calendar API] 조회일(KST): ${reportContextDate}\n${formatCalendarEventsAsMarkdown(apiResult.events)}\n\n[JSON]\n${JSON.stringify(apiResult.events)}\n\n`;
+            }
+          } else {
+            const historyRes = await slackApi('conversations.history', { channel: targetChannel.id, limit: 100 }, env.BOT_TOKEN);
+            if (historyRes.ok) {
+              const context = historyRes.messages.reverse().map(m =>
+                `[발신:${findMemberById(m.user)?.name || m.user}] ${resolveEmailsInText(m.text || '')}`
+              ).join('\n\n');
+              rawData += `[#${targetChannel.name} 채널 원문]\n${context}`;
+            } else {
+              rawData += `[#${targetChannel.name}] 히스토리 조회 실패: ${historyRes.error || 'unknown'}`;
             }
           }
 
-          if (historyRes.ok) {
-            const context = historyRes.messages.reverse().map(m =>
-              `[발신:${findMemberById(m.user)?.name || m.user}] ${resolveEmailsInText(m.text || '')}`
-            ).join('\n\n');
-            rawData += `[#${targetChannel.name} 채널 원문]\n${context}`;
-          } else {
-            rawData += `[#${targetChannel.name}] 히스토리 조회 실패: ${historyRes.error || 'unknown'}`;
-          }
-
-          const calendarRules = args.category === 'calendar'
-            ? `[일정 답변 규칙]\n- 제목·시간은 [0. Slack 구조 파싱]을 최우선으로 사용하세요.\n- "hnin", "hni 출장"은 캘린더 구분명이며 일정 제목이 아닙니다.\n- 원문 괄호·담당자·게스트 표기를 유지하세요.\n`
-            : '';
+          const calendarRules = '';
 
           const summaryRes = await fetch(geminiUrl, {
             method: 'POST',
