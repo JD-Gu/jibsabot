@@ -127,6 +127,17 @@ const GEMINI_TOOLS = [{
         },
         required: []
       }
+    },
+    {
+      name: 'search_drive',
+      description: '구글 드라이브에서 사업 자료·기술 문서·제안서 등을 검색하고 내용을 요약합니다.',
+      parameters: {
+        type: 'OBJECT',
+        properties: {
+          query: { type: 'STRING', description: '검색할 키워드 또는 문서 주제' }
+        },
+        required: ['query']
+      }
     }
   ]
 }];
@@ -303,7 +314,7 @@ function parsePrivateKey(raw) {
   return key;
 }
 
-async function getGoogleAccessToken() {
+async function getGoogleAccessToken(scopes = ['https://www.googleapis.com/auth/calendar.readonly']) {
   const clientEmail = process.env.GOOGLE_CLIENT_EMAIL?.trim();
   const rawKey      = process.env.GOOGLE_PRIVATE_KEY;
   const privateKey  = parsePrivateKey(rawKey);
@@ -321,7 +332,7 @@ async function getGoogleAccessToken() {
     const now    = Math.floor(Date.now() / 1000);
     const header = Buffer.from(JSON.stringify({ alg: 'RS256', typ: 'JWT' })).toString('base64url');
     const claims = Buffer.from(JSON.stringify({
-      iss: clientEmail, scope: 'https://www.googleapis.com/auth/calendar.readonly',
+      iss: clientEmail, scope: scopes.join(' '),
       aud: 'https://oauth2.googleapis.com/token', exp: now + 3600, iat: now
     })).toString('base64url');
 
@@ -421,7 +432,88 @@ async function fetchCalendarEventsForKstDay(ymd) {
   return { events: allEvents };
 }
 
-// ─── [5] S3 뉴스 검색 (Gemini Google Search) ─────────────────────────
+// ─── [5] Google Drive 검색 ───────────────────────────────────────────
+
+/**
+ * Drive API로 파일 검색 → 텍스트 파일은 내용 발췌, 나머지는 메타정보 반환
+ * 서비스 계정에 공유된 파일만 검색됩니다.
+ */
+async function searchGoogleDrive(query, maxResults = 8) {
+  const auth = await getGoogleAccessToken([
+    'https://www.googleapis.com/auth/drive.readonly'
+  ]);
+  if (auth.error) return { error: auth.error };
+
+  try {
+    // 파일 검색 (공유 드라이브 포함)
+    const q = encodeURIComponent(
+      `fullText contains '${query.replace(/'/g, "\\'")}' and trashed = false`
+    );
+    const fields = 'files(id,name,mimeType,modifiedTime,webViewLink,owners,size)';
+    const url = `https://www.googleapis.com/drive/v3/files?q=${q}&fields=${fields}&pageSize=${maxResults}&includeItemsFromAllDrives=true&supportsAllDrives=true&orderBy=modifiedTime desc`;
+
+    const res  = await fetch(url, { headers: { Authorization: `Bearer ${auth.token}` } });
+    const data = await res.json();
+
+    if (!res.ok || data.error) {
+      console.error(`[DRIVE] 검색 실패: ${data?.error?.message || res.status}`);
+      return { error: data?.error?.message || `HTTP ${res.status}` };
+    }
+
+    const files = data.files || [];
+    console.log(`[DRIVE] "${query}" → ${files.length}개 파일 검색됨`);
+
+    // 텍스트 계열 파일은 내용 일부 발췌
+    const TEXT_TYPES = [
+      'application/vnd.google-apps.document',
+      'text/plain', 'text/html', 'text/csv',
+      'application/vnd.google-apps.spreadsheet'
+    ];
+
+    const results = await Promise.all(files.map(async f => {
+      let snippet = '';
+      if (TEXT_TYPES.includes(f.mimeType)) {
+        try {
+          const exportMime = f.mimeType === 'application/vnd.google-apps.document'
+            ? 'text/plain'
+            : f.mimeType === 'application/vnd.google-apps.spreadsheet'
+            ? 'text/csv' : 'text/plain';
+          const exportUrl = f.mimeType.startsWith('application/vnd.google-apps')
+            ? `https://www.googleapis.com/drive/v3/files/${f.id}/export?mimeType=${encodeURIComponent(exportMime)}`
+            : `https://www.googleapis.com/drive/v3/files/${f.id}?alt=media`;
+          const er = await fetch(exportUrl, { headers: { Authorization: `Bearer ${auth.token}` } });
+          if (er.ok) {
+            const txt = await er.text();
+            snippet = txt.replace(/\s+/g, ' ').trim().slice(0, 600);
+          }
+        } catch { /* 발췌 실패 시 메타만 */ }
+      }
+      return {
+        name: f.name,
+        mimeType: f.mimeType,
+        modified: f.modifiedTime?.slice(0, 10) || '',
+        link: f.webViewLink || '',
+        snippet
+      };
+    }));
+
+    return { files: results };
+  } catch (e) {
+    console.error(`[DRIVE] 예외: ${e.message}`);
+    return { error: e.message };
+  }
+}
+
+function formatDriveResultForGemini(files) {
+  if (!files?.length) return '검색 결과 없음';
+  return files.map((f, i) =>
+    `[${i+1}] ${f.name} (수정: ${f.modified})\n` +
+    (f.snippet ? `내용 발췌: ${f.snippet}\n` : '') +
+    `링크: ${f.link}`
+  ).join('\n\n');
+}
+
+// ─── [6] S3 뉴스 검색 (Gemini Google Search) ─────────────────────────
 
 // 허용 언론사 도메인 (주요 국내외 신뢰 매체)
 const TRUSTED_NEWS_DOMAINS = [
@@ -794,7 +886,8 @@ async function handleBoss(text, channel, threadTs, env) {
     `3. 일정 조회 → report_management_status(category=calendar, query=오늘/내일/날짜)\n` +
     `4. 뉴스·시장동향 → search_news(keywords=키워드)\n` +
     `5. 채널 업무현황 → summarize_all_channels(scope=all|management|department|...)\n` +
-    `6. 특정 직원에게 전달 → send_message(name=이름, message=내용)`;
+    `6. 특정 직원에게 전달 → send_message(name=이름, message=내용)\n` +
+    `7. 사업자료·기술문서·제안서 검색 → search_drive(query=검색어)`;
 
   // 최근 대화 히스토리 로드 (최대 10턴)
   const history = await buildConversationHistory(channel, threadTs, env.BOT_TOKEN, 10);
@@ -841,6 +934,61 @@ async function handleBoss(text, channel, threadTs, env) {
             channel, thread_ts: threadTs,
             text: '✅ #news 채널에도 공유했습니다.'
           }, env.BOT_TOKEN);
+
+        // ── Google Drive 검색 ──
+        } else if (name === 'search_drive') {
+          await slackApi('chat.postMessage', {
+            channel, thread_ts: threadTs,
+            text: `🔍 드라이브에서 *"${args.query}"* 검색 중입니다...`
+          }, env.BOT_TOKEN);
+
+          const driveResult = await searchGoogleDrive(args.query);
+
+          if (driveResult.error) {
+            await slackApi('chat.postMessage', {
+              channel, thread_ts: threadTs,
+              text: `⚠️ 드라이브 검색 실패: ${driveResult.error}`
+            }, env.BOT_TOKEN);
+          } else if (!driveResult.files?.length) {
+            await slackApi('chat.postMessage', {
+              channel, thread_ts: threadTs,
+              text: `📂 *"${args.query}"* 관련 파일을 드라이브에서 찾지 못했습니다.`
+            }, env.BOT_TOKEN);
+          } else {
+            // Gemini로 내용 분석·요약
+            const driveRaw = formatDriveResultForGemini(driveResult.files);
+            const driveRes = await fetch(geminiUrl, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                contents: [{ role: 'user', parts: [{ text:
+                  `구글 드라이브에서 "${args.query}" 검색 결과입니다.\n\n${driveRaw}\n\n` +
+                  `위 자료를 바탕으로 대표님께 핵심 내용을 요약 보고하세요. ` +
+                  `파일별로 주요 내용을 정리하고, H&I 사업과의 연관성을 설명하세요. ` +
+                  `파일 링크도 포함하세요.`
+                }] }]
+              })
+            });
+            const driveData = await driveRes.json();
+            const driveReply = driveData.candidates?.[0]?.content?.parts?.[0]?.text;
+
+            // 파일 목록 + Gemini 요약 함께 전송
+            const fileList = driveResult.files
+              .map((f, i) => `${i+1}. <${f.link}|${f.name}> _(${f.modified})_`)
+              .join('\n');
+
+            await slackApi('chat.postMessage', {
+              channel, thread_ts: threadTs,
+              text: `📂 *드라이브 검색: "${args.query}"* — ${driveResult.files.length}개 파일\n\n${fileList}`
+            }, env.BOT_TOKEN);
+
+            if (driveReply) {
+              await slackApi('chat.postMessage', {
+                channel, thread_ts: threadTs,
+                text: driveReply
+              }, env.BOT_TOKEN);
+            }
+          }
 
         // ── S6 채널 일괄 요약 ──
         } else if (name === 'summarize_all_channels') {
