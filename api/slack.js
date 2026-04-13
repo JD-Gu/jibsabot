@@ -448,7 +448,7 @@ function isTrustedNewsUrl(uri) {
   } catch { return false; }
 }
 
-/** 키워드 하나에 대한 단일 검색 */
+/** [1단계] 키워드 하나 검색 — 원문 수집 */
 async function searchOneKeyword(keyword, today, geminiKey) {
   const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${geminiKey}`;
   const res = await fetch(url, {
@@ -457,11 +457,15 @@ async function searchOneKeyword(keyword, today, geminiKey) {
     body: JSON.stringify({
       contents: [{ role: 'user', parts: [{ text:
         `오늘 날짜: ${today}\n\n` +
-        `"${keyword}" 관련 뉴스를 검색하여 최근 7일 이내 기사만 최대 2건 정리해 주세요.\n` +
-        `⚠️ 반드시 연합뉴스, 조선일보, 중앙일보, 동아일보, 한국경제, 매일경제, 전자신문, ZDNet, 뉴시스, 뉴스1 등 ` +
-        `신뢰할 수 있는 주요 언론사 기사만 사용하세요. 블로그, 커뮤니티, 성인·낚시성 사이트는 절대 포함하지 마세요.\n` +
-        `7일 이상 지난 기사나 신뢰할 수 없는 출처는 제외합니다. 없으면 "최근 뉴스 없음"이라고만 써 주세요.\n\n` +
-        `형식:\n[제목]\n요약: (2~3문장)\n출처: (언론사) | 날짜: (YYYY-MM-DD)\nH&I 관련성: (한 줄)`
+        `"${keyword}" 키워드로 최근 7일 이내 뉴스를 검색하여 최대 3건을 아래 형식으로 정리하세요.\n` +
+        `⚠️ 연합뉴스·조선일보·중앙일보·한국경제·매일경제·전자신문·ZDNet·뉴시스·뉴스1 등 신뢰 언론사만 사용.\n` +
+        `블로그·커뮤니티·성인·낚시성 사이트 절대 제외. 해당 기사가 없으면 "없음"만 쓰세요.\n\n` +
+        `형식 (각 기사마다):\n` +
+        `제목: (기사 제목 원문)\n` +
+        `날짜: (YYYY-MM-DD)\n` +
+        `출처: (언론사명)\n` +
+        `내용: (핵심 내용 3~4문장)\n` +
+        `키워드: ${keyword}`
       }] }],
       tools: [{ google_search: {} }]
     })
@@ -469,56 +473,92 @@ async function searchOneKeyword(keyword, today, geminiKey) {
   const data = await res.json();
   return {
     keyword,
-    text:   data.candidates?.[0]?.content?.parts?.[0]?.text || '검색 실패',
-    // 허용 도메인 링크만 통과
+    text:   data.candidates?.[0]?.content?.parts?.[0]?.text || '없음',
     chunks: (data.candidates?.[0]?.groundingMetadata?.groundingChunks || [])
               .filter(c => isTrustedNewsUrl(c.web?.uri))
   };
 }
 
-/** 키워드 배열 또는 단일 문자열을 받아 키워드별 병렬 검색 후 합산 */
+/** [2단계] 전체 수집 결과를 종합 브리핑으로 재구성 */
+async function synthesizeNewsBriefing(rawResults, today, geminiKey) {
+  const rawText = rawResults
+    .filter(r => r.text && r.text !== '없음' && !r.text.includes('검색 실패'))
+    .map(r => `[검색어: ${r.keyword}]\n${r.text}`)
+    .join('\n\n---\n\n');
+
+  if (!rawText.trim()) return '오늘 관련 최신 뉴스를 찾지 못했습니다.';
+
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${geminiKey}`;
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      contents: [{ role: 'user', parts: [{ text:
+        `오늘(${today}) H&I(주식회사 에이치앤아이) CEO를 위한 뉴스 브리핑을 작성하세요.\n` +
+        `H&I 핵심 사업: GNSS/RTK 초정밀측위, HI-RTK, HI-PPE 안전장구, IoT 플랫폼, 스마트건설\n\n` +
+        `아래는 여러 키워드로 수집한 원시 뉴스 데이터입니다:\n\n${rawText}\n\n` +
+        `[브리핑 작성 규칙]\n` +
+        `1. 중복 기사는 한 번만 포함 (가장 상세한 내용으로)\n` +
+        `2. H&I 사업과 관련성이 높은 순으로 정렬\n` +
+        `3. 각 기사마다 H&I에 미치는 영향과 시사점을 구체적으로 서술\n` +
+        `4. 마지막에 "📊 종합 인사이트" 섹션: 이번 주 업계 흐름 요약 + H&I 대응 방향 2~3가지 제언\n\n` +
+        `[출력 형식 — Slack mrkdwn]\n` +
+        `각 기사:\n` +
+        `*[번호]. 제목*\n` +
+        `• 날짜: YYYY-MM-DD | 출처: 언론사\n` +
+        `• 내용: (3~4문장)\n` +
+        `• H&I 시사점: (구체적 영향·기회·위협 서술)\n`
+      }] }]
+    })
+  });
+  const data = await res.json();
+  return data.candidates?.[0]?.content?.parts?.[0]?.text || '브리핑 생성 실패';
+}
+
+/** 키워드 배열 또는 단일 문자열을 받아 2단계 검색·종합 실행 */
 async function fetchNewsWithSearch(keywords, geminiKey) {
   const today = new Date().toLocaleDateString('ko-KR', { timeZone: 'Asia/Seoul' });
 
-  // 사용자가 키워드를 직접 지정한 경우: 쉼표/공백으로 분리
   let keywordList;
   if (keywords && keywords.trim()) {
     keywordList = keywords.split(/[,，\s]+/).map(k => k.trim()).filter(Boolean);
   } else {
-    keywordList = HNI.knowledge.newsKeywords; // 기본 배열
+    keywordList = HNI.knowledge.newsKeywords;
   }
 
+  console.log(`[NEWS] 키워드 ${keywordList.length}개 병렬 검색: ${keywordList.join(', ')}`);
+
   try {
+    // 1단계: 병렬 수집
     const results = await Promise.all(keywordList.map(kw => searchOneKeyword(kw, today, geminiKey)));
     const allChunks = results.flatMap(r => r.chunks);
-    const combinedText = results
-      .map(r => `🔍 *[${r.keyword}]*\n${r.text}`)
-      .join('\n\n');
-    return { text: combinedText, chunks: allChunks };
-  } catch (e) { return { text: `뉴스 검색 오류: ${e.message}`, chunks: [] }; }
+    console.log(`[NEWS] 수집 완료, grounding 링크 ${allChunks.length}개`);
+
+    // 2단계: 종합 브리핑 생성
+    const briefing = await synthesizeNewsBriefing(results, today, geminiKey);
+
+    return { text: briefing, chunks: allChunks };
+  } catch (e) {
+    console.error(`[NEWS] 오류: ${e.message}`);
+    return { text: `뉴스 검색 오류: ${e.message}`, chunks: [] };
+  }
 }
 
 /** Gemini 뉴스 결과 + grounding 링크 → Slack 가독성 포맷 */
 function formatNewsSlackMessage(text, chunks) {
-  // 본문: 번호별 블록을 이모지로 꾸밈
-  const body = text
-    .replace(/^\[?(\d+)\]?\.\s+/gm, (_, n) => `\n${'─'.repeat(36)}\n*${['1️⃣','2️⃣','3️⃣','4️⃣','5️⃣'][+n-1] || `${n}.`} `)
-    .replace(/^요약:/gm, '   📝 요약:')
-    .replace(/^출처:/gm, '   📌 출처:')
-    .replace(/^H&I 관련성:/gm, '   🏢 관련성:')
-    .trim();
+  const today = new Date().toLocaleDateString('ko-KR', { timeZone: 'Asia/Seoul' });
 
-  // grounding 링크 (중복 제거)
+  // grounding 링크 중복 제거
   const seen = new Set();
   const links = chunks
     .filter(c => c.web?.uri && c.web?.title)
     .filter(c => { if (seen.has(c.web.uri)) return false; seen.add(c.web.uri); return true; })
-    .slice(0, 8)
+    .slice(0, 10)
     .map((c, i) => `${i + 1}. <${c.web.uri}|${c.web.title}>`)
     .join('\n');
 
-  const linkBlock = links ? `\n\n${'─'.repeat(36)}\n🔗 *기사 링크*\n${links}` : '';
-  return `📰 *뉴스 브리핑*  _(${new Date().toLocaleDateString('ko-KR', { timeZone: 'Asia/Seoul' })})_\n${body}${linkBlock}`;
+  const linkBlock = links ? `\n\n${'─'.repeat(36)}\n🔗 *기사 원문 링크*\n${links}` : '';
+  return `📰 *H&I 뉴스 브리핑*  _(${today})_\n${'─'.repeat(36)}\n${text}${linkBlock}`;
 }
 
 // ─── [6] S6 채널 일괄 요약 ───────────────────────────────────────────
