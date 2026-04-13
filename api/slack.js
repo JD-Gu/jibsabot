@@ -343,14 +343,39 @@ function resolveCalendarKstYmd(userText, toolQuery) {
 
 // ─── [4] Google Calendar ─────────────────────────────────────────────
 
+/**
+ * Vercel 환경변수에서 PEM 개인키를 안전하게 파싱합니다.
+ * Node 24 / OpenSSL 3.x 에서는 crypto.createPrivateKey()로 명시 파싱해야 합니다.
+ */
+function parsePrivateKey(raw) {
+  if (!raw) return null;
+  let key = raw
+    .replace(/\\n/g, '\n')   // literal \n → 실제 개행
+    .replace(/\\r/g, '')      // literal \r 제거
+    .replace(/\r\n/g, '\n')  // Windows CRLF → LF
+    .replace(/\r/g, '\n')    // 구형 Mac CR → LF
+    .trim();
+
+  // PEM 헤더/푸터 사이 본문에 개행이 없으면 64자 단위로 강제 삽입
+  key = key.replace(
+    /(-----BEGIN [^-]+-----)([\s\S]+?)(-----END [^-]+-----)/,
+    (_, hdr, body, ftr) => {
+      const b = body.replace(/\s+/g, '');
+      const lines = b.match(/.{1,64}/g)?.join('\n') || b;
+      return `${hdr}\n${lines}\n${ftr}`;
+    }
+  );
+  return key;
+}
+
 async function getGoogleAccessToken() {
   const clientEmail = process.env.GOOGLE_CLIENT_EMAIL?.trim();
   const rawKey      = process.env.GOOGLE_PRIVATE_KEY;
-  const privateKey  = rawKey?.replace(/\\n/g, '\n').trim();
+  const privateKey  = parsePrivateKey(rawKey);
 
   console.log('[CAL:AUTH] 시작');
-  console.log(`[CAL:AUTH] GOOGLE_CLIENT_EMAIL: ${clientEmail ? `${clientEmail.slice(0, 10)}...` : '❌ 미설정'}`);
-  console.log(`[CAL:AUTH] GOOGLE_PRIVATE_KEY: ${rawKey ? `설정됨 (${rawKey.length}자, \\n포함=${rawKey.includes('\\n')}, 헤더=${rawKey.includes('BEGIN')?'있음':'❌없음'})` : '❌ 미설정'}`);
+  console.log(`[CAL:AUTH] GOOGLE_CLIENT_EMAIL: ${clientEmail ? `${clientEmail.slice(0, 12)}...` : '❌ 미설정'}`);
+  console.log(`[CAL:AUTH] GOOGLE_PRIVATE_KEY: ${rawKey ? `설정됨 (원본 ${rawKey.length}자, 정제 후 ${privateKey?.length}자, 헤더=${privateKey?.includes('BEGIN') ? '있음' : '❌없음'})` : '❌ 미설정'}`);
 
   if (!clientEmail || !privateKey) {
     console.error('[CAL:AUTH] ❌ 환경변수 누락으로 인증 불가');
@@ -367,10 +392,14 @@ async function getGoogleAccessToken() {
 
     let sig;
     try {
-      sig = crypto.createSign('RSA-SHA256').update(`${header}.${claims}`).sign(privateKey, 'base64url');
-      console.log('[CAL:AUTH] JWT 서명 성공');
+      // Node 24 / OpenSSL 3.x: createPrivateKey()로 명시 파싱 후 서명
+      const keyObject = crypto.createPrivateKey({ key: privateKey, format: 'pem' });
+      sig = crypto.createSign('RSA-SHA256').update(`${header}.${claims}`).sign(keyObject, 'base64url');
+      console.log('[CAL:AUTH] ✅ JWT 서명 성공');
     } catch (signErr) {
       console.error(`[CAL:AUTH] ❌ JWT 서명 실패: ${signErr.message}`);
+      console.error(`[CAL:AUTH] 키 첫 50자: ${privateKey.slice(0, 50)}`);
+      console.error(`[CAL:AUTH] 키 마지막 50자: ${privateKey.slice(-50)}`);
       return { error: `JWT 서명 실패: ${signErr.message}` };
     }
 
