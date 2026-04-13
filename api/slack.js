@@ -731,13 +731,19 @@ async function handleBoss(text, channel, threadTs, env) {
         if (name === 'search_news') {
           const { text: newsText, chunks } = await fetchNewsWithSearch(args.keywords, env.GEMINI_KEY);
           const formatted = formatNewsSlackMessage(newsText, chunks);
-          // 대표님께 스레드 응답
+          // 1️⃣ 대표님께 먼저 전달
           await slackApi('chat.postMessage', {
             channel, thread_ts: threadTs, text: formatted
           }, env.BOT_TOKEN);
-          // #news 채널에도 공유
+          // 2️⃣ #news 채널 공유 (대표님 확인 후)
           await slackApi('chat.postMessage', {
-            channel: 'C02MND8B0KE', text: formatted
+            channel: 'C02MND8B0KE',
+            text: `${formatted}\n\n_구대표님께 먼저 보고 후 공유되었습니다._`
+          }, env.BOT_TOKEN);
+          // 3️⃣ 대표님께 공유 완료 안내
+          await slackApi('chat.postMessage', {
+            channel, thread_ts: threadTs,
+            text: '✅ #news 채널에도 공유했습니다.'
           }, env.BOT_TOKEN);
 
         // ── S6 채널 일괄 요약 ──
