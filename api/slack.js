@@ -1,5 +1,5 @@
 /**
- * [v16.16] 구대표집사봇(H&I) — 6대 시나리오 구현
+ * [v16.17] 구대표집사봇(H&I) — 6대 시나리오 구현
  *
  * S1: 지시 전달 → 직원 회신 시 대표 자동 보고       ← send_message 강화
  * S2: 직원 DM → 간단 직답 / 대표 컨펌 → 전달        ← handleEmployee 신규
@@ -1136,7 +1136,30 @@ export default async function handler(req, res) {
     if (body.type === 'url_verification') return res.status(200).json({ challenge: body.challenge });
 
     const event = body.event;
-    if (!event || event.bot_id || !event.text) return res.status(200).end();
+    if (!event || !event.text) return res.status(200).end();
+
+    // ── H&I 경영지원 봇 → #notice 포워딩 ──
+    const KPI_BOT_NAME    = 'H&I 경영지원';
+    const CMM_CXO_ID      = 'C02M8BMJZG9';
+    const NOTICE_CH_ID    = 'C02M3C4D5JA';
+    const isKpiBot = event.bot_id &&
+                     (event.username === KPI_BOT_NAME || event.bot_profile?.name === KPI_BOT_NAME) &&
+                     event.channel === CMM_CXO_ID;
+    if (isKpiBot) {
+      console.log('[KPI-FWD] H&I 경영지원 봇 메시지 → #notice 포워딩');
+      const kpiFooter = { type: 'section', text: { type: 'mrkdwn', text: '📊 <https://kpi.hni-gl.com|https://kpi.hni-gl.com> 에서 상세사항 조회가능합니다.' } };
+      const fwdPayload = { channel: NOTICE_CH_ID };
+      if (event.blocks && event.blocks.length > 0) {
+        fwdPayload.blocks = [...event.blocks, { type: 'divider' }, kpiFooter];
+        fwdPayload.text = event.text; // fallback
+      } else {
+        fwdPayload.text = event.text + '\n\n📊 <https://kpi.hni-gl.com|https://kpi.hni-gl.com> 에서 상세사항 조회가능합니다.';
+      }
+      await slackApi('chat.postMessage', fwdPayload, env.BOT_TOKEN);
+      return res.status(200).send('ok');
+    }
+
+    if (event.bot_id) return res.status(200).end();
 
     const cleanText = event.text.replace(/<@U[A-Z0-9]+>/g, '').trim();
     if (!cleanText) return res.status(200).end();
